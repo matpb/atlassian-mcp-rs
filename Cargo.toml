@@ -1,0 +1,34 @@
+[package]
+name = "atlassian-mcp"
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/matpb/atlassian-mcp-rs"
+readme = "README.md"
+keywords = ["mcp", "jira", "atlassian", "ai"]
+categories = ["web-programming", "command-line-utilities"]
+license = "MIT"
+authors = ["Mathieu-Philippe Bourgeois <bourgeois.mat@gmail.com>"]
+description = "Rust MCP server for Atlassian Cloud (Jira + Confluence) over streamable HTTP; Atlassian credentials per HTTP request via headers"
+
+[[bin]]
+name = "atlassian-mcp"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+http = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rmcp = { version = "1.2", features = ["server", "transport-streamable-http-server"] }
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
