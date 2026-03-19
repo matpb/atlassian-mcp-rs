@@ -207,8 +207,8 @@ mod tests {
     fn resolve_accepts_three_headers() {
         let parts = parts_with_headers([
             ("X-Atlassian-Site-Url", "https://x.atlassian.net"),
-            ("X-Atlassian-Email", "a@b.com"),
-            ("X-Atlassian-Api-Token", "tok"),
+            ("X-Atlassian-Email", "mcp-test-noreply@example.invalid"),
+            ("X-Atlassian-Api-Token", "stub_atlassian_api_header_001"),
         ]);
         let c = resolve_credentials(&parts).unwrap();
         assert_eq!(c.site_url, "https://x.atlassian.net");
@@ -224,8 +224,8 @@ mod tests {
     fn resolve_trims_trailing_slash_on_site_url() {
         let parts = parts_with_headers([
             ("X-Atlassian-Site-Url", "https://x.atlassian.net///"),
-            ("X-Atlassian-Email", "a@b.com"),
-            ("X-Atlassian-Api-Token", "tok"),
+            ("X-Atlassian-Email", "mcp-test-noreply@example.invalid"),
+            ("X-Atlassian-Api-Token", "stub_atlassian_api_header_001"),
         ]);
         let c = resolve_credentials(&parts).unwrap();
         assert_eq!(c.site_url, "https://x.atlassian.net");
@@ -235,8 +235,8 @@ mod tests {
     fn resolve_confluence_site_override() {
         let parts = parts_with_headers([
             ("X-Atlassian-Site-Url", "https://jira-only.atlassian.net"),
-            ("X-Atlassian-Email", "a@b.com"),
-            ("X-Atlassian-Api-Token", "tok"),
+            ("X-Atlassian-Email", "mcp-test-noreply@example.invalid"),
+            ("X-Atlassian-Api-Token", "stub_atlassian_api_header_001"),
             (
                 "X-Atlassian-Confluence-Site-Url",
                 "https://wiki-other.atlassian.net",
@@ -253,12 +253,12 @@ mod tests {
     fn bitbucket_resolve_accepts_three_headers_and_default_base() {
         let parts = parts_with_headers([
             ("X-Bitbucket-Workspace", "acme"),
-            ("X-Bitbucket-Username", "alice"),
-            ("X-Bitbucket-App-Password", "appw"),
+            ("X-Bitbucket-Username", "stub_bb_user_001"),
+            ("X-Bitbucket-App-Password", "stub_bb_header_second_001"),
         ]);
         let c = resolve_bitbucket_credentials(&parts).unwrap();
         assert_eq!(c.workspace, "acme");
-        assert_eq!(c.username, "alice");
+        assert_eq!(c.username, "stub_bb_user_001");
         assert_eq!(c.base_api_url, BITBUCKET_CLOUD_API_2_0);
     }
 
@@ -270,8 +270,8 @@ mod tests {
                 "https://example.com/bitbucket/rest/api/1.0",
             ),
             ("X-Bitbucket-Workspace", "acme"),
-            ("X-Bitbucket-Username", "alice"),
-            ("X-Bitbucket-App-Password", "appw"),
+            ("X-Bitbucket-Username", "stub_bb_user_001"),
+            ("X-Bitbucket-App-Password", "stub_bb_header_second_001"),
         ]);
         let c = resolve_bitbucket_credentials(&parts).unwrap();
         assert_eq!(
