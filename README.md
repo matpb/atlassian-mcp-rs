@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://www.rust-lang.org/)
 
-Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3) and **Confluence** (REST API under `/wiki`) — using **streamable HTTP** (`rmcp` + Axum) and **HTTP Basic** auth (`email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens)).
+Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3), **Confluence** (REST API under `/wiki`), and **Bitbucket** ([REST API 2.0](https://developer.atlassian.com/cloud/bitbucket/rest/intro/)) — using **streamable HTTP** (`rmcp` + Axum). Jira and Confluence use **HTTP Basic** with `email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Bitbucket uses **HTTP Basic** with your Bitbucket **username** + [app password](https://support.atlassian.com/bitbucket-cloud/docs/app-passwords/) (not the Jira/Confluence API token).
 
 ## Authentication (required headers)
 
@@ -29,6 +29,26 @@ If Confluence is on a **different** Cloud site, set:
 | `X-Atlassian-Confluence-Site-Url` | `https://other-site.atlassian.net` |
 
 Confluence calls then use `{that}/wiki/rest/api`; Jira still uses `{X-Atlassian-Site-Url}/rest/api/3`.
+
+### Bitbucket (required headers for Bitbucket tools)
+
+Bitbucket credentials are also taken **only** from HTTP headers (not from the server environment). Any tool whose name starts with `bitbucket_` requires:
+
+| Header | Value |
+|--------|--------|
+| `X-Bitbucket-Workspace` | Workspace slug (e.g. `acme`) |
+| `X-Bitbucket-Username` | Bitbucket account username (used with app password) |
+| `X-Bitbucket-App-Password` | [App password](https://support.atlassian.com/bitbucket-cloud/docs/app-passwords/) with appropriate scopes |
+
+Optional:
+
+| Header | Value |
+|--------|--------|
+| `X-Bitbucket-Base-Url` | API root including version path. Default: `https://api.bitbucket.org/2.0` (Bitbucket Cloud). For **Bitbucket Server / Data Center**, set this to your instance’s REST base (often ends in `/rest/api/1.0`). |
+
+If Bitbucket headers are missing when a Bitbucket tool runs, the server returns JSON-RPC **`-32600` Invalid Request** with `reason`: **`missing_bitbucket_credential_headers`**.
+
+You can send **both** Atlassian (Jira/Confluence) and Bitbucket headers on every request so all tools work from one client configuration.
 
 ### Server process environment (bind only)
 
@@ -101,7 +121,10 @@ Use your MCP client to send the three `X-Atlassian-*` headers on **every** MCP r
       "headers": {
         "X-Atlassian-Site-Url": "https://your-company.atlassian.net",
         "X-Atlassian-Email": "${ATLASSIAN_EMAIL}",
-        "X-Atlassian-Api-Token": "${ATLASSIAN_API_TOKEN}"
+        "X-Atlassian-Api-Token": "${ATLASSIAN_API_TOKEN}",
+        "X-Bitbucket-Workspace": "${BITBUCKET_WORKSPACE}",
+        "X-Bitbucket-Username": "${BITBUCKET_USERNAME}",
+        "X-Bitbucket-App-Password": "${BITBUCKET_APP_PASSWORD}"
       }
     }
   }
@@ -116,6 +139,8 @@ claude mcp add --transport http atlassian http://127.0.0.1:8432/mcp
 
 ## Tools
 
+### Jira & Confluence
+
 | Tool | Description |
 |------|-------------|
 | `jira_get_issue` | Compact issue: `key`, `summary`, plain-text `description`, `status`, `attachments`, all comments. |
@@ -125,6 +150,33 @@ claude mcp add --transport http atlassian http://127.0.0.1:8432/mcp
 | `confluence_search` | **CQL** search; `limit` (1–100, default 25). |
 | `confluence_get_page` | Page by content id: **trimmed** fields for LLMs — id, title, status, space (key/name), version, `lastUpdated` (when + author display/email), `body.storage` with `char_count_*` and **truncation** after 120k characters, plus `links.webui` / `links.tinyui` only (no full `_links` map). |
 
+### Bitbucket (REST 2.0–compatible)
+
+Most tools accept optional `workspace` (overrides `X-Bitbucket-Workspace`) and, where the API supports it, optional `pagelen` / `page` (1–100 for `pagelen`).
+
+| Tool | Description |
+|------|-------------|
+| `bitbucket_list_repositories` | List repos in the workspace; optional `role` filter. |
+| `bitbucket_get_repository` | Repository metadata by `repo_slug`. |
+| `bitbucket_list_branches` | `refs/branches`; optional `name_filter` (substring, Bitbucket `q=name~"..."`). |
+| `bitbucket_list_pull_requests` | List PRs; optional `state` (`OPEN`, `MERGED`, `DECLINED`, `SUPERSEDED`). |
+| `bitbucket_get_pull_request` | Single PR by `pull_request_id`. |
+| `bitbucket_create_pull_request` | Open a PR: `title`, `source_branch`, `destination_branch`, optional `description`, `close_source_branch`. |
+| `bitbucket_get_pull_request_diff` | Full unified diff as JSON `{ "diff": "..." }`. |
+| `bitbucket_get_pull_request_diffstat` | Per-file diff stats (`diffstat`). |
+| `bitbucket_list_pull_request_comments` | PR comments (paginated). |
+| `bitbucket_get_pull_request_comment` | One comment by `comment_id`. |
+| `bitbucket_create_pull_request_comment` | New comment; optional `parent_comment_id` (reply) or `inline_path` + `inline_to` (inline). |
+| `bitbucket_reply_pull_request_comment` | Reply via `parent_comment_id` + `content`. |
+| `bitbucket_update_pull_request_comment` | Edit comment body (`content.raw`). |
+| `bitbucket_delete_pull_request_comment` | Delete a comment. |
+| `bitbucket_list_commits` | Commits for `revision` (branch/tag/commit; default `HEAD`). |
+| `bitbucket_get_commit` | Single commit by hash. |
+| `bitbucket_list_pull_request_activity` | PR activity stream. |
+| `bitbucket_approve_pull_request` / `bitbucket_unapprove_pull_request` | Approve or withdraw approval. |
+| `bitbucket_decline_pull_request` | Decline PR; optional `message`. |
+| `bitbucket_merge_pull_request` | Merge; optional `merge_strategy` (`merge_commit`, `squash`, `fast_forward`), `close_source_branch`, `message`. |
+
 ## Other MCP clients (e.g. Cursor)
 
 Configure HTTP MCP and supply the same three headers per your client’s docs.
@@ -132,6 +184,10 @@ Configure HTTP MCP and supply the same three headers per your client’s docs.
 ## Jira / Confluence Server (Data Center)
 
 This project targets **Atlassian Cloud** paths. On-prem may differ.
+
+## Bitbucket Server (Data Center)
+
+Set `X-Bitbucket-Base-Url` to your server’s REST API root. Paths and payloads can differ from Cloud; prefer the [server REST docs](https://developer.atlassian.com/server/bitbucket/rest/v906/intro/) for your version when troubleshooting.
 
 ## Security
 

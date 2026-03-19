@@ -1,5 +1,5 @@
-use http::request::Parts;
 use http::HeaderMap;
+use http::request::Parts;
 
 /// Atlassian Cloud site + API token (HTTP Basic: email + token).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +33,36 @@ impl AtlassianCredentials {
 
     pub fn confluence_rest_root(&self) -> String {
         format!("{}/wiki/rest/api", self.confluence_site_url)
+    }
+}
+
+/// Bitbucket Cloud REST API 2.0 (or compatible base URL) via HTTP Basic: username + app password.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BitbucketCredentials {
+    /// API root including `/2.0`, e.g. `https://api.bitbucket.org/2.0`
+    pub base_api_url: String,
+    pub workspace: String,
+    pub username: String,
+    pub app_password: String,
+}
+
+impl BitbucketCredentials {
+    pub fn new(
+        base_api_url: String,
+        workspace: String,
+        username: String,
+        app_password: String,
+    ) -> Self {
+        Self {
+            base_api_url: base_api_url.trim_end_matches('/').to_string(),
+            workspace: workspace.trim().to_string(),
+            username,
+            app_password,
+        }
+    }
+
+    pub fn api_root_trimmed(&self) -> String {
+        self.base_api_url.trim_end_matches('/').to_string()
     }
 }
 
@@ -87,6 +117,53 @@ pub fn resolve_credentials(parts: &Parts) -> Result<AtlassianCredentials, String
             }
             Err(format!(
                 "Incomplete Atlassian credential headers (JSON-RPC -32600). Missing: {}. All three headers are required on every MCP HTTP request.",
+                missing.join(", ")
+            ))
+        }
+    }
+}
+
+const BB_BASE: &str = "x-bitbucket-base-url";
+const BB_WORKSPACE: &str = "x-bitbucket-workspace";
+const BB_USER: &str = "x-bitbucket-username";
+const BB_APP_PW: &str = "x-bitbucket-app-password";
+
+/// Default Bitbucket Cloud REST root when `X-Bitbucket-Base-Url` is omitted.
+pub const BITBUCKET_CLOUD_API_2_0: &str = "https://api.bitbucket.org/2.0";
+
+/// Requires Bitbucket credential headers on each MCP HTTP request that invokes Bitbucket tools.
+pub fn resolve_bitbucket_credentials(parts: &Parts) -> Result<BitbucketCredentials, String> {
+    let headers = &parts.headers;
+    let base =
+        header_trimmed(headers, BB_BASE).unwrap_or_else(|| BITBUCKET_CLOUD_API_2_0.to_string());
+    let workspace = header_trimmed(headers, BB_WORKSPACE);
+    let username = header_trimmed(headers, BB_USER);
+    let app_password = header_trimmed(headers, BB_APP_PW);
+
+    match (&workspace, &username, &app_password) {
+        (Some(w), Some(u), Some(p)) => Ok(BitbucketCredentials::new(
+            base,
+            w.clone(),
+            u.clone(),
+            p.clone(),
+        )),
+        (None, None, None) => Err(
+            "Missing required Bitbucket credential HTTP headers. Send X-Bitbucket-Workspace, X-Bitbucket-Username, and X-Bitbucket-App-Password on every MCP request that uses Bitbucket tools (JSON-RPC error code -32600 Invalid Request)."
+                .into(),
+        ),
+        _ => {
+            let mut missing = Vec::new();
+            if workspace.is_none() {
+                missing.push("X-Bitbucket-Workspace");
+            }
+            if username.is_none() {
+                missing.push("X-Bitbucket-Username");
+            }
+            if app_password.is_none() {
+                missing.push("X-Bitbucket-App-Password");
+            }
+            Err(format!(
+                "Incomplete Bitbucket credential headers (JSON-RPC -32600). Missing: {}.",
                 missing.join(", ")
             ))
         }
@@ -166,6 +243,40 @@ mod tests {
             ),
         ]);
         let c = resolve_credentials(&parts).unwrap();
-        assert_eq!(c.confluence_rest_root(), "https://wiki-other.atlassian.net/wiki/rest/api");
+        assert_eq!(
+            c.confluence_rest_root(),
+            "https://wiki-other.atlassian.net/wiki/rest/api"
+        );
+    }
+
+    #[test]
+    fn bitbucket_resolve_accepts_three_headers_and_default_base() {
+        let parts = parts_with_headers([
+            ("X-Bitbucket-Workspace", "acme"),
+            ("X-Bitbucket-Username", "alice"),
+            ("X-Bitbucket-App-Password", "appw"),
+        ]);
+        let c = resolve_bitbucket_credentials(&parts).unwrap();
+        assert_eq!(c.workspace, "acme");
+        assert_eq!(c.username, "alice");
+        assert_eq!(c.base_api_url, BITBUCKET_CLOUD_API_2_0);
+    }
+
+    #[test]
+    fn bitbucket_resolve_custom_base_url() {
+        let parts = parts_with_headers([
+            (
+                "X-Bitbucket-Base-Url",
+                "https://example.com/bitbucket/rest/api/1.0",
+            ),
+            ("X-Bitbucket-Workspace", "acme"),
+            ("X-Bitbucket-Username", "alice"),
+            ("X-Bitbucket-App-Password", "appw"),
+        ]);
+        let c = resolve_bitbucket_credentials(&parts).unwrap();
+        assert_eq!(
+            c.api_root_trimmed(),
+            "https://example.com/bitbucket/rest/api/1.0"
+        );
     }
 }

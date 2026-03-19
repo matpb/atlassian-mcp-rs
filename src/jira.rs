@@ -230,18 +230,16 @@ impl JiraClient {
             }
 
             for issue in issues {
-                if global_index >= start_at && collected.len() < max as usize {
-                    if let Some(obj) = issue.as_object() {
-                        collected.push(slim_search_issue(obj));
-                    }
+                if global_index >= start_at
+                    && collected.len() < max as usize
+                    && let Some(obj) = issue.as_object()
+                {
+                    collected.push(slim_search_issue(obj));
                 }
                 global_index += 1;
             }
 
-            let is_last = raw
-                .get("isLast")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+            let is_last = raw.get("isLast").and_then(|v| v.as_bool()).unwrap_or(true);
             next_cursor = raw
                 .get("nextPageToken")
                 .and_then(|t| t.as_str())
@@ -263,11 +261,11 @@ impl JiraClient {
             .cloned()
             .or_else(|| last.get("totalIssueCount").cloned());
 
-        let is_last_out = last
-            .get("isLast")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let next_out = last.get("nextPageToken").and_then(|t| t.as_str()).map(str::to_string);
+        let is_last_out = last.get("isLast").and_then(|v| v.as_bool()).unwrap_or(true);
+        let next_out = last
+            .get("nextPageToken")
+            .and_then(|t| t.as_str())
+            .map(str::to_string);
 
         Ok(json!({
             "startAt": start_at,
@@ -439,11 +437,7 @@ fn adf_to_plain(value: &Value) -> Option<String> {
         }
     }
     let s = out.trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 fn adf_walk_adf(node: &Value, out: &mut String) {
@@ -468,7 +462,8 @@ fn adf_walk_adf(node: &Value, out: &mut String) {
             }
         }
         "emoji" => {
-            if let Some(s) = obj.get("attrs")
+            if let Some(s) = obj
+                .get("attrs")
                 .and_then(|a| a.get("shortName"))
                 .and_then(|x| x.as_str())
             {
@@ -476,7 +471,8 @@ fn adf_walk_adf(node: &Value, out: &mut String) {
             }
         }
         "mention" => {
-            if let Some(t) = obj.get("attrs")
+            if let Some(t) = obj
+                .get("attrs")
                 .and_then(|a| a.get("text"))
                 .and_then(|x| x.as_str())
             {
@@ -513,37 +509,6 @@ fn encode_path_segment(key: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encode_path_segment_allows_safe_chars() {
-        assert_eq!(encode_path_segment("PROJ-123"), "PROJ-123");
-    }
-
-    #[test]
-    fn encode_path_segment_percent_encodes_other_bytes() {
-        assert_eq!(encode_path_segment("a/b"), "a%2Fb");
-        assert_eq!(encode_path_segment("x y"), "x%20y");
-    }
-
-    #[test]
-    fn plain_text_to_adf_single_line() {
-        let v = plain_text_to_adf("hello");
-        assert_eq!(v["type"], "doc");
-        assert_eq!(v["content"][0]["type"], "paragraph");
-        assert_eq!(v["content"][0]["content"][0]["text"], "hello");
-    }
-
-    #[test]
-    fn adf_to_plain_round_trip_simple() {
-        let adf = plain_text_to_adf("one\ntwo");
-        let plain = adf_to_plain(&adf).expect("plain text");
-        assert_eq!(plain, "one\ntwo");
-    }
-}
-
 fn plain_text_to_adf(text: &str) -> Value {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut paragraphs: Vec<Value> = Vec::new();
@@ -574,4 +539,35 @@ fn plain_text_to_adf(text: &str) -> Value {
         "version": 1,
         "content": paragraphs
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_path_segment_allows_safe_chars() {
+        assert_eq!(encode_path_segment("PROJ-123"), "PROJ-123");
+    }
+
+    #[test]
+    fn encode_path_segment_percent_encodes_other_bytes() {
+        assert_eq!(encode_path_segment("a/b"), "a%2Fb");
+        assert_eq!(encode_path_segment("x y"), "x%20y");
+    }
+
+    #[test]
+    fn plain_text_to_adf_single_line() {
+        let v = plain_text_to_adf("hello");
+        assert_eq!(v["type"], "doc");
+        assert_eq!(v["content"][0]["type"], "paragraph");
+        assert_eq!(v["content"][0]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn adf_to_plain_round_trip_simple() {
+        let adf = plain_text_to_adf("one\ntwo");
+        let plain = adf_to_plain(&adf).expect("plain text");
+        assert_eq!(plain, "one\ntwo");
+    }
 }

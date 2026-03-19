@@ -25,10 +25,7 @@ impl ServerConfig {
 fn from_host_port(host: Option<String>, port: Option<String>) -> ServerConfig {
     ServerConfig {
         host: host.unwrap_or_else(|| "0.0.0.0".into()),
-        port: port
-            .as_deref()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(8432),
+        port: port.as_deref().and_then(|p| p.parse().ok()).unwrap_or(8432),
     }
 }
 

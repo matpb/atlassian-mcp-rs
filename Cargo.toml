@@ -8,7 +8,7 @@ keywords = ["mcp", "jira", "atlassian", "ai"]
 categories = ["web-programming", "command-line-utilities"]
 license = "MIT"
 authors = ["Mathieu-Philippe Bourgeois <bourgeois.mat@gmail.com>"]
-description = "Rust MCP server for Atlassian Cloud (Jira + Confluence) over streamable HTTP; Atlassian credentials per HTTP request via headers"
+description = "Rust MCP server for Atlassian Cloud (Jira + Confluence + Bitbucket) over streamable HTTP; credentials per HTTP request via headers"
 
 [[bin]]
 name = "atlassian-mcp"

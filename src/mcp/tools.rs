@@ -7,6 +7,7 @@ use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use crate::bitbucket::BitbucketClient;
 use crate::confluence::ConfluenceClient;
 use crate::credentials;
 use crate::jira::JiraClient;
@@ -34,6 +35,26 @@ impl AtlassianMcp {
             )
         })
     }
+
+    fn resolve_bitbucket(
+        parts: &Parts,
+    ) -> Result<crate::credentials::BitbucketCredentials, ErrorData> {
+        credentials::resolve_bitbucket_credentials(parts).map_err(|msg| {
+            ErrorData::invalid_request(
+                msg,
+                Some(serde_json::json!({
+                    "code": -32600,
+                    "reason": "missing_bitbucket_credential_headers"
+                })),
+            )
+        })
+    }
+}
+
+fn bb_workspace_override(w: &Option<String>) -> Option<&str> {
+    w.as_ref()
+        .map(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty())
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -87,6 +108,176 @@ struct ConfluenceSearchParams {
 struct ConfluenceGetPageParams {
     /// Confluence content ID (numeric string)
     page_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListReposParams {
+    /// When set, use this workspace instead of `X-Bitbucket-Workspace`
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+    /// Bitbucket role filter, e.g. `member`
+    #[serde(default)]
+    role: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbRepoParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListPrsParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// OPEN, MERGED, DECLINED, SUPERSEDED — omit for all active states per API defaults
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbPrIdParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbCreatePrParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
+    source_branch: String,
+    destination_branch: String,
+    #[serde(default)]
+    close_source_branch: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbPrCommentIdParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    comment_id: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbCreatePrCommentParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    /// Comment body in markdown (stored as `content.raw`)
+    content: String,
+    /// When set, this comment is a reply to an existing top-level comment
+    #[serde(default)]
+    parent_comment_id: Option<u64>,
+    /// File path for an inline comment (requires `inline_to`)
+    #[serde(default)]
+    inline_path: Option<String>,
+    /// End line for inline comment (requires `inline_path`)
+    #[serde(default)]
+    inline_to: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbReplyPrCommentParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    parent_comment_id: u64,
+    content: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbUpdatePrCommentParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    comment_id: u64,
+    content: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListCommitsParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Branch name, tag, or commit; default `HEAD`
+    #[serde(default)]
+    revision: Option<String>,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbGetCommitParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    commit: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListBranchesParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+    /// Substring matched with Bitbucket `q=name~\"...\"`
+    #[serde(default)]
+    name_filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbDeclinePrParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbMergePrParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    /// merge_commit, squash, or fast_forward
+    #[serde(default)]
+    merge_strategy: Option<String>,
+    #[serde(default)]
+    close_source_branch: Option<bool>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[tool_router]
@@ -210,6 +401,515 @@ impl AtlassianMcp {
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
+
+    #[tool(
+        name = "bitbucket_list_repositories",
+        description = "List repositories in a Bitbucket workspace (Cloud REST 2.0). Requires X-Bitbucket-Workspace, X-Bitbucket-Username, X-Bitbucket-App-Password; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0). Optional `workspace` overrides the header."
+    )]
+    async fn bitbucket_list_repositories(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListReposParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_repositories(
+                bb_workspace_override(&p.workspace),
+                p.pagelen,
+                p.page,
+                p.role.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_repository",
+        description = "Get repository metadata (Bitbucket Cloud REST 2.0 GET .../repositories/{workspace}/{repo_slug})."
+    )]
+    async fn bitbucket_get_repository(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbRepoParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_repository(bb_workspace_override(&p.workspace), &p.repo_slug)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_branches",
+        description = "List branches in a repository (`refs/branches`). Optional `name_filter` uses Bitbucket query `name~\"...\"`."
+    )]
+    async fn bitbucket_list_branches(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListBranchesParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_branches(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pagelen,
+                p.page,
+                p.name_filter.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_pull_requests",
+        description = "List pull requests for a repository. Optional `state`: OPEN, MERGED, DECLINED, SUPERSEDED."
+    )]
+    async fn bitbucket_list_pull_requests(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListPrsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_pull_requests(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.state.as_deref(),
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pull_request",
+        description = "Get a single pull request by id."
+    )]
+    async fn bitbucket_get_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_create_pull_request",
+        description = "Open a pull request from `source_branch` into `destination_branch` in the same repository."
+    )]
+    async fn bitbucket_create_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbCreatePrParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .create_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.title,
+                p.description.as_deref(),
+                &p.source_branch,
+                &p.destination_branch,
+                p.close_source_branch,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pull_request_diff",
+        description = "Raw unified diff for a pull request (text). Returned JSON: { \"diff\": \"...\" }."
+    )]
+    async fn bitbucket_get_pull_request_diff(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let diff = bb
+            .get_pull_request_diff(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = serde_json::json!({ "diff": diff });
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pull_request_diffstat",
+        description = "Per-file diff statistics for a pull request (JSON from Bitbucket `diffstat` endpoint)."
+    )]
+    async fn bitbucket_get_pull_request_diffstat(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_pull_request_diffstat(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_pull_request_comments",
+        description = "List comments on a pull request (paginated; use `next` in the response to fetch more)."
+    )]
+    async fn bitbucket_list_pull_request_comments(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_pull_request_comments(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pull_request_comment",
+        description = "Fetch one pull request comment by id."
+    )]
+    async fn bitbucket_get_pull_request_comment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrCommentIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_pull_request_comment(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.comment_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_create_pull_request_comment",
+        description = "Add a PR comment. Use `parent_comment_id` to reply, or `inline_path` + `inline_to` for an inline comment."
+    )]
+    async fn bitbucket_create_pull_request_comment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbCreatePrCommentParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .create_pull_request_comment(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                &p.content,
+                p.parent_comment_id,
+                p.inline_path.as_deref(),
+                p.inline_to,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_reply_pull_request_comment",
+        description = "Reply to an existing pull request comment (sets `parent` to `parent_comment_id`)."
+    )]
+    async fn bitbucket_reply_pull_request_comment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbReplyPrCommentParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .create_pull_request_comment(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                &p.content,
+                Some(p.parent_comment_id),
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_update_pull_request_comment",
+        description = "Edit a pull request comment body (`content.raw`). Use this to apply revised text or fixups."
+    )]
+    async fn bitbucket_update_pull_request_comment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbUpdatePrCommentParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .update_pull_request_comment(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.comment_id,
+                &p.content,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_delete_pull_request_comment",
+        description = "Delete a pull request comment (requires permission)."
+    )]
+    async fn bitbucket_delete_pull_request_comment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrCommentIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .delete_pull_request_comment(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.comment_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_commits",
+        description = "List commits reachable from `revision` (branch name, tag, or commit; default HEAD)."
+    )]
+    async fn bitbucket_list_commits(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListCommitsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_commits(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.revision.as_deref(),
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_commit",
+        description = "Get a single commit by hash (`GET .../commit/{commit}`)."
+    )]
+    async fn bitbucket_get_commit(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbGetCommitParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_commit(bb_workspace_override(&p.workspace), &p.repo_slug, &p.commit)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_pull_request_activity",
+        description = "Activity stream for a pull request (approvals, comments, updates, etc.)."
+    )]
+    async fn bitbucket_list_pull_request_activity(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_pull_request_activity(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_approve_pull_request",
+        description = "Approve a pull request as the authenticated user."
+    )]
+    async fn bitbucket_approve_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .approve_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_unapprove_pull_request",
+        description = "Withdraw your approval on a pull request."
+    )]
+    async fn bitbucket_unapprove_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPrIdParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .unapprove_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_decline_pull_request",
+        description = "Decline (reject) a pull request. Optional `message`."
+    )]
+    async fn bitbucket_decline_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbDeclinePrParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .decline_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.message.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_merge_pull_request",
+        description = "Merge an open pull request. Optional `merge_strategy`: merge_commit, squash, fast_forward; optional `close_source_branch`, `message`."
+    )]
+    async fn bitbucket_merge_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbMergePrParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .merge_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.merge_strategy.as_deref(),
+                p.close_source_branch,
+                p.message.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
 }
 
 #[tool_handler]
@@ -218,7 +918,7 @@ impl ServerHandler for AtlassianMcp {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Atlassian Cloud MCP (Jira REST v3 + Confluence REST). Every MCP HTTP request MUST include headers: X-Atlassian-Site-Url (e.g. https://company.atlassian.net), X-Atlassian-Email, X-Atlassian-Api-Token. Optional: X-Atlassian-Confluence-Site-Url when Confluence is on a different Atlassian Cloud site than Jira (otherwise same host + /wiki/rest/api is used). Missing headers yield JSON-RPC Invalid Request (-32600). Tools: jira_get_issue, jira_add_comment, jira_update_description, jira_search (JQL), confluence_search (CQL), confluence_get_page."
+            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username, X-Bitbucket-App-Password on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace."
                 .to_string(),
         );
         info

@@ -122,10 +122,11 @@ fn slim_search_hit(hit: &Value) -> Value {
     let status = content
         .and_then(|c| c.get("status"))
         .and_then(|s| s.as_str());
-    let title = hit
-        .get("title")
-        .and_then(|t| t.as_str())
-        .or_else(|| content.and_then(|c| c.get("title")).and_then(|t| t.as_str()));
+    let title = hit.get("title").and_then(|t| t.as_str()).or_else(|| {
+        content
+            .and_then(|c| c.get("title"))
+            .and_then(|t| t.as_str())
+    });
     let excerpt = hit.get("excerpt").and_then(|e| e.as_str());
     let webui = content
         .and_then(|c| c.get("_links"))
@@ -143,26 +144,20 @@ fn slim_search_hit(hit: &Value) -> Value {
 }
 
 fn slim_page(raw: &Value) -> Value {
-    let space = raw
-        .get("space")
-        .and_then(|s| s.as_object())
-        .map(|s| {
-            json!({
-                "key": s.get("key").and_then(|k| k.as_str()),
-                "name": s.get("name").and_then(|n| n.as_str()),
-            })
-        });
+    let space = raw.get("space").and_then(|s| s.as_object()).map(|s| {
+        json!({
+            "key": s.get("key").and_then(|k| k.as_str()),
+            "name": s.get("name").and_then(|n| n.as_str()),
+        })
+    });
 
-    let version = raw
-        .get("version")
-        .and_then(|v| v.as_object())
-        .map(|v| {
-            json!({
-                "number": v.get("number"),
-                "when": v.get("when").and_then(|w| w.as_str()),
-                "message": v.get("message").and_then(|m| m.as_str()),
-            })
-        });
+    let version = raw.get("version").and_then(|v| v.as_object()).map(|v| {
+        json!({
+            "number": v.get("number"),
+            "when": v.get("when").and_then(|w| w.as_str()),
+            "message": v.get("message").and_then(|m| m.as_str()),
+        })
+    });
 
     let last_updated = raw
         .get("history")
@@ -193,8 +188,7 @@ fn slim_page(raw: &Value) -> Value {
         .and_then(|s| s.get("value"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let (body_text, total_chars, truncated) =
-        truncate_chars(full_value, MAX_CONFLUENCE_BODY_CHARS);
+    let (body_text, total_chars, truncated) = truncate_chars(full_value, MAX_CONFLUENCE_BODY_CHARS);
 
     let links = raw.get("_links").and_then(|l| l.as_object());
     let webui = links.and_then(|l| l.get("webui")).and_then(|w| w.as_str());
@@ -236,6 +230,17 @@ fn truncate_chars(s: &str, max: usize) -> (String, usize, bool) {
     let head: String = s.chars().take(max).collect();
     let note = format!("\n\n[… truncated for MCP: included {max} of {total} characters]");
     (head + &note, total, true)
+}
+
+fn encode_path_segment(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    for &b in key.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -282,17 +287,9 @@ mod tests {
         });
         let slim = slim_page(&raw);
         assert_eq!(slim["body"]["truncated"], true);
-        assert_eq!(slim["body"]["char_count_total"], MAX_CONFLUENCE_BODY_CHARS + 50);
+        assert_eq!(
+            slim["body"]["char_count_total"],
+            MAX_CONFLUENCE_BODY_CHARS + 50
+        );
     }
-}
-
-fn encode_path_segment(key: &str) -> String {
-    let mut out = String::with_capacity(key.len());
-    for &b in key.as_bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }

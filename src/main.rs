@@ -1,3 +1,4 @@
+mod bitbucket;
 mod config;
 mod confluence;
 mod credentials;
@@ -10,8 +11,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-    session::local::LocalSessionManager,
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
