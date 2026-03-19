@@ -16,7 +16,7 @@ The server **does not** read Atlassian credentials from its environment. Every M
 | `X-Atlassian-Email` | Account email for the API token |
 | `X-Atlassian-Api-Token` | API token |
 
-If any header is missing, the server responds with a **JSON-RPC 2.0 error** using **code `-32600` (Invalid Request)** via `rmcp`’s `invalid_request`, plus a short `data` object with `"reason": "missing_atlassian_credential_headers"` when all three are absent.
+If any required header is missing or empty, the server responds with a **JSON-RPC 2.0 error** using **code `-32600` (Invalid Request)** via `rmcp`’s `invalid_request`, plus a short `data` object that includes `"reason": "missing_atlassian_credential_headers"`.
 
 ### Confluence base URL (optional)
 
@@ -95,6 +95,11 @@ Configure HTTP MCP and supply the same three headers per your client’s docs.
 
 This project targets **Atlassian Cloud** paths. On-prem may differ.
 
+## Security
+
+- **Never commit** Atlassian API tokens or site URLs that identify private data. `.env` is listed in `.gitignore`; keep secrets in your MCP client configuration (for example env expansion in `.mcp.json` as above).
+- The server logs **bind address and port** only (`ServerConfig`); it does not read Atlassian credentials from the process environment.
+
 ## License
 
-MIT
+[MIT](LICENSE)
