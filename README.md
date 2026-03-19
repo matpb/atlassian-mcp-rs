@@ -39,7 +39,45 @@ Confluence calls then use `{that}/wiki/rest/api`; Jira still uses `{X-Atlassian-
 
 Optional: `RUST_LOG` for tracing.
 
-## Run
+## Quick start (Docker)
+
+From the repository root:
+
+```bash
+docker compose up -d --build
+```
+
+That builds the image, starts the container, and publishes **port 8432** by default.
+
+**Optional `.env` (bind / logging only)** — Create a `.env` file next to `docker-compose.yml` if you want to override defaults. Compose loads it into the container when present (`required: false` if the file is missing). Use only server variables such as `MCP_PORT`, `MCP_HOST`, or `RUST_LOG`. **Do not** put Atlassian API tokens here; the container does not use them—the MCP client must still send the `X-Atlassian-*` headers on every request.
+
+If you change `MCP_PORT`, set it in **`.env`** (not only in your shell) so `docker-compose.yml`’s port mapping and the server inside the container stay aligned.
+
+```bash
+# example .env (optional)
+MCP_PORT=8432
+```
+
+**Check that it is up** (use your `MCP_PORT` if you overrode the default):
+
+```bash
+curl -sf http://127.0.0.1:8432/health
+```
+
+**Point your MCP client at** `http://127.0.0.1:8432/mcp` (adjust host and port if the service runs elsewhere or you set `MCP_PORT` in `.env`).
+
+**Makefile shortcuts:** `make docker-build`, `make up`, `make health` (uses `MCP_PORT` from the environment, default `8432`).
+
+**Without Compose:**
+
+```bash
+docker build -t atlassian-mcp:local .
+docker run --rm -p 8432:8432 atlassian-mcp:local
+```
+
+Use `-e MCP_PORT=9000 -p 9000:9000` if you need a different port inside and outside the container.
+
+## Run (from source)
 
 ```bash
 cargo run --release
