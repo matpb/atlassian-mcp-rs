@@ -1,11 +1,12 @@
-# env_file: optional .env for MCP_PORT / MCP_HOST only. Atlassian credentials must be sent by MCP clients as HTTP headers.
+# Atlassian credentials are sent by MCP clients as HTTP headers — no credential env vars needed.
 services:
   atlassian-mcp:
     build: .
-    image: atlassian-mcp:local
+    container_name: atlassian-mcp
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
     ports:
-      - "${MCP_PORT:-8432}:${MCP_PORT:-8432}"
+      - "${MCP_PORT:-8432}:8432"
+    environment:
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8432"
+      RUST_LOG: "${RUST_LOG:-atlassian_mcp=info}"

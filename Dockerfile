@@ -1,15 +1,22 @@
-# syntax=docker/dockerfile:1
-FROM rust:1-bookworm AS builder
-WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release
+FROM rust:1.94-alpine AS builder
+WORKDIR /build
+RUN apk upgrade --no-cache && apk add --no-cache musl-dev
 
-FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/atlassian-mcp /usr/local/bin/atlassian-mcp
+# Cache dependencies — copy manifest first
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source to build deps
+RUN mkdir -p src/mcp && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release 2>/dev/null || true && \
+    rm -rf src/
+
+# Copy real source and build
+COPY src/ src/
+RUN touch src/main.rs && \
+    cargo build --release
+
+FROM gcr.io/distroless/cc-debian12
+COPY --from=builder /build/target/release/atlassian-mcp /usr/local/bin/
 EXPOSE 8432
-USER nobody
-ENTRYPOINT ["/usr/local/bin/atlassian-mcp"]
+ENTRYPOINT ["atlassian-mcp"]
