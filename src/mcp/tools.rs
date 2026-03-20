@@ -110,6 +110,33 @@ struct ConfluenceGetPageParams {
     page_id: String,
 }
 
+fn default_body_format() -> String {
+    "storage".to_string()
+}
+
+fn default_status() -> String {
+    "current".to_string()
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ConfluenceCreatePageParams {
+    /// Confluence space ID (numeric string) or space key (e.g. "SIKU")
+    space_id: String,
+    /// Page title
+    title: String,
+    /// Page body content (XHTML for "storage" format, or wiki markup for "wiki" format)
+    body: String,
+    /// Body format: "storage" (Confluence XHTML, default) or "wiki" (wiki markup)
+    #[serde(default = "default_body_format")]
+    body_format: String,
+    /// Parent page ID (numeric string); omit to create a top-level page in the space
+    #[serde(default)]
+    parent_id: Option<String>,
+    /// Page status: "current" (default) or "draft"
+    #[serde(default = "default_status")]
+    status: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct BbListReposParams {
     /// When set, use this workspace instead of `X-Bitbucket-Workspace`
@@ -395,6 +422,33 @@ impl AtlassianMcp {
         let cf = ConfluenceClient::new(self.http.clone(), &creds);
         let value = cf
             .get_page(&p.page_id)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "confluence_create_page",
+        description = "Create a new Confluence page via the v2 API. Body can be Confluence storage format (XHTML) or wiki markup. Returns the created page's id, title, status, and webui link."
+    )]
+    async fn confluence_create_page(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<ConfluenceCreatePageParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let cf = ConfluenceClient::new(self.http.clone(), &creds);
+        let value = cf
+            .create_page(
+                &p.space_id,
+                &p.title,
+                &p.body,
+                &p.body_format,
+                p.parent_id.as_deref(),
+                &p.status,
+            )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 

@@ -84,6 +84,121 @@ impl ConfluenceClient {
         Ok(slim_page(&raw))
     }
 
+    /// Resolve a space key (e.g. "SIKU") to its numeric v2 space ID.
+    /// If the input is already numeric, returns it as-is.
+    async fn resolve_space_id(&self, space_id_or_key: &str) -> Result<String, String> {
+        // If it's already numeric, return as-is
+        if space_id_or_key.chars().all(|c| c.is_ascii_digit()) {
+            return Ok(space_id_or_key.to_string());
+        }
+        // Otherwise, look up by key via v2 API
+        let url = format!(
+            "{}/api/v2/spaces?keys={}",
+            self.wiki_base_url(),
+            encode_path_segment(space_id_or_key)
+        );
+        let raw: Value = self.get_json(&url).await?;
+        let results = raw
+            .get("results")
+            .and_then(|r| r.as_array())
+            .ok_or_else(|| format!("No spaces found for key \"{space_id_or_key}\""))?;
+        let space = results
+            .first()
+            .ok_or_else(|| format!("Space \"{space_id_or_key}\" not found"))?;
+        let id = space
+            .get("id")
+            .and_then(|i| i.as_str())
+            .ok_or_else(|| "Space response missing id field".to_string())?;
+        Ok(id.to_string())
+    }
+
+    pub async fn create_page(
+        &self,
+        space_id: &str,
+        title: &str,
+        body: &str,
+        body_format: &str,
+        parent_id: Option<&str>,
+        status: &str,
+    ) -> Result<Value, String> {
+        let space_id = space_id.trim();
+        if space_id.is_empty() {
+            return Err("space_id must not be empty".into());
+        }
+        let space_id = self.resolve_space_id(space_id).await?;
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("title must not be empty".into());
+        }
+        let representation = match body_format {
+            "storage" | "wiki" => body_format,
+            other => return Err(format!("body_format must be \"storage\" or \"wiki\", got \"{other}\"")),
+        };
+
+        let url = format!("{}/api/v2/pages", self.wiki_base_url());
+
+        let mut payload = json!({
+            "spaceId": space_id,
+            "status": status,
+            "title": title,
+            "body": {
+                "representation": representation,
+                "value": body,
+            }
+        });
+        if let Some(pid) = parent_id {
+            let pid = pid.trim();
+            if !pid.is_empty() {
+                payload.as_object_mut().unwrap().insert("parentId".into(), json!(pid));
+            }
+        }
+
+        let response = self
+            .http
+            .post(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Confluence request failed: {e}"))?;
+
+        let status_code = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Confluence response: {e}"))?;
+
+        if !status_code.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(format!("Confluence returned {status_code}: {msg}"));
+        }
+
+        let raw: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+        // Return a slim view: id, title, status, webui link
+        let webui = raw
+            .pointer("/_links/webui")
+            .and_then(|w| w.as_str());
+
+        Ok(json!({
+            "id": raw.get("id"),
+            "title": raw.get("title"),
+            "status": raw.get("status"),
+            "webui": webui,
+        }))
+    }
+
+    /// Return the wiki base URL (without /rest/api or /api/v2 suffix).
+    fn wiki_base_url(&self) -> &str {
+        // wiki_api_root ends with `/wiki/rest/api` — strip `/rest/api` to get the wiki root
+        self.wiki_api_root
+            .strip_suffix("/rest/api")
+            .unwrap_or(&self.wiki_api_root)
+    }
+
     async fn get_json(&self, url: &str) -> Result<Value, String> {
         let response = self
             .http
