@@ -132,7 +132,11 @@ impl ConfluenceClient {
         }
         let representation = match body_format {
             "storage" | "wiki" => body_format,
-            other => return Err(format!("body_format must be \"storage\" or \"wiki\", got \"{other}\"")),
+            other => {
+                return Err(format!(
+                    "body_format must be \"storage\" or \"wiki\", got \"{other}\""
+                ));
+            }
         };
 
         let url = format!("{}/api/v2/pages", self.wiki_base_url());
@@ -149,7 +153,10 @@ impl ConfluenceClient {
         if let Some(pid) = parent_id {
             let pid = pid.trim();
             if !pid.is_empty() {
-                payload.as_object_mut().unwrap().insert("parentId".into(), json!(pid));
+                payload
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("parentId".into(), json!(pid));
             }
         }
 
@@ -179,9 +186,7 @@ impl ConfluenceClient {
             serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
 
         // Return a slim view: id, title, status, webui link
-        let webui = raw
-            .pointer("/_links/webui")
-            .and_then(|w| w.as_str());
+        let webui = raw.pointer("/_links/webui").and_then(|w| w.as_str());
 
         Ok(json!({
             "id": raw.get("id"),

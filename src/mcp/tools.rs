@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::bitbucket::BitbucketClient;
 use crate::confluence::ConfluenceClient;
 use crate::credentials;
-use crate::jira::JiraClient;
+use crate::jira::{self, JiraClient};
 
 #[derive(Clone)]
 pub struct AtlassianMcp {
@@ -57,26 +57,55 @@ fn bb_workspace_override(w: &Option<String>) -> Option<&str> {
         .filter(|s| !s.trim().is_empty())
 }
 
+fn default_jira_content_format() -> String {
+    "plain".to_string()
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct GetIssueParams {
     /// Jira issue key, e.g. `PROJ-123`
     issue_key: String,
+    /// When true, include `description_adf` and each comment's `body_adf` (raw Atlassian Document Format JSON) for lossless round-trips. Default false returns only plain-text `description` and `body`.
+    #[serde(default)]
+    include_adf: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct AddCommentParams {
     /// Jira issue key, e.g. `PROJ-123`
     issue_key: String,
-    /// Plain-text comment body (sent to Jira as Atlassian Document Format)
+    /// Comment body: plain text if `content_format` is `plain`, or a **JSON string** of a full ADF document `{"type":"doc","version":1,"content":[...]}` if `content_format` is `adf`
     comment: String,
+    /// `plain` (default): each line becomes a paragraph. `adf`: `comment` must be valid ADF document JSON (headings, lists, links, code blocks, etc.).
+    #[serde(default = "default_jira_content_format")]
+    content_format: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct UpdateDescriptionParams {
     /// Jira issue key, e.g. `PROJ-123`
     issue_key: String,
-    /// New description as plain text (stored as Atlassian Document Format)
+    /// New description: plain text if `content_format` is `plain`, or ADF document JSON string if `content_format` is `adf`
     description: String,
+    /// `plain` (default) or `adf` (full Atlassian Document Format JSON string)
+    #[serde(default = "default_jira_content_format")]
+    content_format: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CreateIssueParams {
+    /// Project key, e.g. `PROJ`
+    project_key: String,
+    /// Issue type **name** as shown in Jira (e.g. `Task`, `Bug`, `Story`)
+    issue_type: String,
+    /// Issue summary (title)
+    summary: String,
+    /// Optional description; interpreted per `description_content_format`
+    #[serde(default)]
+    description: Option<String>,
+    /// When `description` is set: `plain` (default) or `adf` (JSON string of full ADF document)
+    #[serde(default = "default_jira_content_format")]
+    description_content_format: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -311,7 +340,7 @@ struct BbMergePrParams {
 impl AtlassianMcp {
     #[tool(
         name = "jira_get_issue",
-        description = "Fetch a Jira issue as a compact summary for an LLM: key, summary (title), plain-text description, status, attachments, and all comments. Requires X-Atlassian-Site-Url, X-Atlassian-Email, and X-Atlassian-Api-Token on every MCP HTTP request."
+        description = "Fetch a Jira issue for an LLM: key, summary, description and comments. By default description/comments are **lossy plain text** extracted from Atlassian Document Format (ADF). Set include_adf=true to also get description_adf and per-comment body_adf (raw ADF JSON) so you can edit rich content without losing structure. Requires X-Atlassian-Site-Url, X-Atlassian-Email, and X-Atlassian-Api-Token on every MCP HTTP request."
     )]
     async fn jira_get_issue(
         &self,
@@ -321,7 +350,7 @@ impl AtlassianMcp {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
         let value = jira
-            .get_issue_for_ai(&p.issue_key)
+            .get_issue_for_ai(&p.issue_key, p.include_adf)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
@@ -331,7 +360,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_add_comment",
-        description = "Add a plain-text comment to a Jira issue (posted as Atlassian Document Format)."
+        description = "Add a comment on a Jira issue. Jira stores the body as Atlassian Document Format (ADF). Use content_format=plain (default) for simple text (line breaks become paragraphs). Use content_format=adf and pass a JSON **string** of a full ADF document {\"type\":\"doc\",\"version\":1,\"content\":[...]} for headings, bullet/ordered lists, links, code blocks, mentions, etc. See Atlassian Jira ADF structure docs."
     )]
     async fn jira_add_comment(
         &self,
@@ -340,8 +369,10 @@ impl AtlassianMcp {
     ) -> Result<String, ErrorData> {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
+        let body = jira::document_from_content_format(&p.content_format, &p.comment)
+            .map_err(|e| ErrorData::invalid_params(e, None))?;
         let value = jira
-            .add_comment_plain(&p.issue_key, &p.comment)
+            .add_comment_with_body(&p.issue_key, body)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
@@ -351,7 +382,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_update_description",
-        description = "Replace the Jira issue description with plain text (converted to Atlassian Document Format)."
+        description = "Replace the Jira issue description. Same content_format semantics as jira_add_comment: plain (default) wraps text as ADF paragraphs; adf accepts a JSON string of a full ADF document for rich formatting compatible with Jira Cloud REST API v3."
     )]
     async fn jira_update_description(
         &self,
@@ -360,8 +391,38 @@ impl AtlassianMcp {
     ) -> Result<String, ErrorData> {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
+        let doc = jira::document_from_content_format(&p.content_format, &p.description)
+            .map_err(|e| ErrorData::invalid_params(e, None))?;
         let value = jira
-            .update_description_plain(&p.issue_key, &p.description)
+            .update_description_with_adf(&p.issue_key, doc)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_create_issue",
+        description = "Create a Jira issue (POST /rest/api/3/issue): project_key, issue_type name (e.g. Task), summary, and optional description. Optional description uses description_content_format plain (default) or adf (JSON string of full ADF document). Same ADF rules as jira_add_comment."
+    )]
+    async fn jira_create_issue(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<CreateIssueParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let desc = match &p.description {
+            None => None,
+            Some(s) if s.trim().is_empty() => None,
+            Some(s) => Some(
+                jira::document_from_content_format(&p.description_content_format, s)
+                    .map_err(|e| ErrorData::invalid_params(e, None))?,
+            ),
+        };
+        let value = jira
+            .create_issue(&p.project_key, &p.issue_type, &p.summary, desc)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 

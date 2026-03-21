@@ -34,7 +34,11 @@ impl JiraClient {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn get_issue_for_ai(&self, issue_key: &str) -> Result<Value, String> {
+    pub async fn get_issue_for_ai(
+        &self,
+        issue_key: &str,
+        include_adf: bool,
+    ) -> Result<Value, String> {
         let key = issue_key.trim();
         if key.is_empty() {
             return Err("issue_key must not be empty".into());
@@ -64,10 +68,13 @@ impl JiraClient {
             .and_then(|s| s.as_str())
             .map(str::to_string);
 
-        let description = fields
-            .get("description")
-            .filter(|d| !d.is_null())
-            .and_then(adf_to_plain);
+        let description_raw = fields.get("description").filter(|d| !d.is_null());
+        let description = description_raw.and_then(adf_to_plain);
+        let description_adf = if include_adf {
+            description_raw.cloned()
+        } else {
+            None
+        };
 
         let status = fields.get("status").map(slim_status);
 
@@ -99,7 +106,7 @@ impl JiraClient {
 
             for c in comments {
                 if let Some(obj) = c.as_object() {
-                    slim_comments.push(slim_comment(obj));
+                    slim_comments.push(slim_comment(obj, include_adf));
                 }
             }
 
@@ -117,7 +124,7 @@ impl JiraClient {
             start_at += batch_len;
         }
 
-        Ok(json!({
+        let mut out = json!({
             "key": issue_key_out,
             "summary": summary,
             "description": description,
@@ -127,16 +134,27 @@ impl JiraClient {
                 "total": slim_comments.len(),
                 "comments": slim_comments,
             },
-        }))
+        });
+        if include_adf
+            && let Some(obj) = out.as_object_mut()
+        {
+            obj.insert(
+                "description_adf".into(),
+                description_adf.unwrap_or(Value::Null),
+            );
+        }
+
+        Ok(out)
     }
 
-    pub async fn add_comment_plain(&self, issue_key: &str, text: &str) -> Result<Value, String> {
+    pub async fn add_comment_with_body(
+        &self,
+        issue_key: &str,
+        body: Value,
+    ) -> Result<Value, String> {
         let key = issue_key.trim();
         if key.is_empty() {
             return Err("issue_key must not be empty".into());
-        }
-        if text.trim().is_empty() {
-            return Err("comment body must not be empty".into());
         }
 
         let url = format!(
@@ -144,15 +162,15 @@ impl JiraClient {
             self.api_root,
             encode_path_segment(key)
         );
-        let payload = json!({ "body": plain_text_to_adf(text) });
+        let payload = json!({ "body": body });
 
         self.post_json(&url, &payload).await
     }
 
-    pub async fn update_description_plain(
+    pub async fn update_description_with_adf(
         &self,
         issue_key: &str,
-        description: &str,
+        description: Value,
     ) -> Result<Value, String> {
         let key = issue_key.trim();
         if key.is_empty() {
@@ -162,11 +180,45 @@ impl JiraClient {
         let url = format!("{}/issue/{}", self.api_root, encode_path_segment(key));
         let payload = json!({
             "fields": {
-                "description": plain_text_to_adf(description)
+                "description": description
             }
         });
 
         self.put_json(&url, &payload).await
+    }
+
+    /// Create a Jira issue (`POST /rest/api/3/issue`). Description is omitted when `None`.
+    pub async fn create_issue(
+        &self,
+        project_key: &str,
+        issue_type_name: &str,
+        summary: &str,
+        description: Option<Value>,
+    ) -> Result<Value, String> {
+        let project_key = project_key.trim();
+        if project_key.is_empty() {
+            return Err("project_key must not be empty".into());
+        }
+        let issue_type_name = issue_type_name.trim();
+        if issue_type_name.is_empty() {
+            return Err("issue_type must not be empty".into());
+        }
+        let summary = summary.trim();
+        if summary.is_empty() {
+            return Err("summary must not be empty".into());
+        }
+
+        let url = format!("{}/issue", self.api_root);
+        let mut fields = serde_json::Map::new();
+        fields.insert("project".into(), json!({ "key": project_key }));
+        fields.insert("issuetype".into(), json!({ "name": issue_type_name }));
+        fields.insert("summary".into(), json!(summary));
+        if let Some(desc) = description {
+            fields.insert("description".into(), desc);
+        }
+
+        let payload = json!({ "fields": Value::Object(fields) });
+        self.post_json(&url, &payload).await
     }
 
     /// Search issues with JQL via `POST /rest/api/3/search/jql` (replaces removed GET `/search`).
@@ -375,15 +427,27 @@ fn slim_search_issue(issue: &serde_json::Map<String, Value>) -> Value {
     })
 }
 
-fn slim_comment(obj: &serde_json::Map<String, Value>) -> Value {
+fn slim_comment(obj: &serde_json::Map<String, Value>, include_adf: bool) -> Value {
     let id = obj.get("id").cloned().unwrap_or(Value::Null);
-    json!({
-        "id": id,
-        "author": obj.get("author").map(slim_user).unwrap_or(Value::Null),
-        "created": obj.get("created").and_then(|v| v.as_str()),
-        "updated": obj.get("updated").and_then(|v| v.as_str()),
-        "body": obj.get("body").and_then(adf_to_plain),
-    })
+    let plain = obj.get("body").and_then(adf_to_plain);
+    if include_adf {
+        json!({
+            "id": id,
+            "author": obj.get("author").map(slim_user).unwrap_or(Value::Null),
+            "created": obj.get("created").and_then(|v| v.as_str()),
+            "updated": obj.get("updated").and_then(|v| v.as_str()),
+            "body": plain,
+            "body_adf": obj.get("body").cloned().unwrap_or(Value::Null),
+        })
+    } else {
+        json!({
+            "id": id,
+            "author": obj.get("author").map(slim_user).unwrap_or(Value::Null),
+            "created": obj.get("created").and_then(|v| v.as_str()),
+            "updated": obj.get("updated").and_then(|v| v.as_str()),
+            "body": plain,
+        })
+    }
 }
 
 fn slim_user(v: &Value) -> Value {
@@ -509,6 +573,54 @@ fn encode_path_segment(key: &str) -> String {
     out
 }
 
+/// Parse a user-supplied JSON string as a Jira/Confluence **Atlassian Document Format** root document.
+/// Expects `{"type":"doc","version":1,"content":[...]}` (same shape Jira REST API v3 uses for description and comments).
+pub fn parse_adf_document_json(text: &str) -> Result<Value, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("ADF document JSON must not be empty".into());
+    }
+    let v: Value =
+        serde_json::from_str(text).map_err(|e| format!("invalid JSON for ADF document: {e}"))?;
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "ADF document root must be a JSON object".to_string())?;
+    let ty = obj
+        .get("type")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| "ADF document must have string field \"type\"".to_string())?;
+    if ty != "doc" {
+        return Err(format!(
+            "ADF document \"type\" must be \"doc\" (Jira Cloud REST v3), got {ty:?}"
+        ));
+    }
+    if !obj.contains_key("version") {
+        return Err("ADF document must include \"version\" (use 1 with Jira Cloud REST v3)".into());
+    }
+    if obj.get("version").and_then(|x| x.as_u64()).is_none()
+        && obj.get("version").and_then(|x| x.as_i64()).is_none()
+    {
+        return Err("ADF document \"version\" must be a number".into());
+    }
+    Ok(v)
+}
+
+/// Build an ADF document from tool input: `plain` wraps lines as paragraphs; `adf` parses full ADF JSON.
+pub fn document_from_content_format(content_format: &str, text: &str) -> Result<Value, String> {
+    match content_format.trim().to_ascii_lowercase().as_str() {
+        "plain" => {
+            if text.trim().is_empty() {
+                return Err("body text must not be empty when content_format is \"plain\"".into());
+            }
+            Ok(plain_text_to_adf(text))
+        }
+        "adf" => parse_adf_document_json(text),
+        other => Err(format!(
+            "content_format must be \"plain\" or \"adf\", got {other:?}"
+        )),
+    }
+}
+
 fn plain_text_to_adf(text: &str) -> Value {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut paragraphs: Vec<Value> = Vec::new();
@@ -569,5 +681,25 @@ mod tests {
         let adf = plain_text_to_adf("one\ntwo");
         let plain = adf_to_plain(&adf).expect("plain text");
         assert_eq!(plain, "one\ntwo");
+    }
+
+    #[test]
+    fn parse_adf_document_json_accepts_minimal_doc() {
+        let s = r#"{"type":"doc","version":1,"content":[]}"#;
+        let v = parse_adf_document_json(s).expect("adf");
+        assert_eq!(v["type"], "doc");
+    }
+
+    #[test]
+    fn parse_adf_document_json_rejects_wrong_type() {
+        let err = parse_adf_document_json(r#"{"type":"paragraph","version":1}"#).unwrap_err();
+        assert!(err.contains("doc"));
+    }
+
+    #[test]
+    fn document_from_content_format_adf_heading() {
+        let s = r#"{"type":"doc","version":1,"content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Hi"}]}]}"#;
+        let v = document_from_content_format("adf", s).expect("doc");
+        assert_eq!(v["content"][0]["type"], "heading");
     }
 }

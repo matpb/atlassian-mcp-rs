@@ -137,15 +137,27 @@ Use your MCP client to send the three `X-Atlassian-*` headers on **every** MCP r
 claude mcp add --transport http atlassian http://127.0.0.1:8432/mcp
 ```
 
+## Jira rich text (Atlassian Document Format)
+
+Jira Cloud **REST API v3** stores issue descriptions and comment bodies as **[Atlassian Document Format (ADF)](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/)** — JSON with `type`, `version`, and nested `content` (headings, lists, links, code blocks, mentions, etc.).
+
+This MCP server:
+
+- **`content_format`: `plain` (default)** — You pass normal text; the server wraps it as simple ADF paragraphs (line breaks → paragraphs). No bold, lists, or links.
+- **`content_format`: `adf`** — You pass a **single JSON string** whose value is a full ADF document root: `{"type":"doc","version":1,"content":[...]}`. Use this when an LLM (or you) need Jira-native rich structure. Invalid JSON or a missing/wrong `type`/`version` returns a tool error.
+
+To **read** rich content without losing structure, call **`jira_get_issue`** with **`include_adf`: true** — the response adds `description_adf` and each comment’s `body_adf` (raw ADF from Jira) alongside the lossy plain-text `description` / `body` fields.
+
 ## Tools
 
 ### Jira & Confluence
 
 | Tool | Description |
 |------|-------------|
-| `jira_get_issue` | Compact issue: `key`, `summary`, plain-text `description`, `status`, `attachments`, all comments. |
-| `jira_add_comment` | Plain-text comment → Atlassian Document Format. |
-| `jira_update_description` | Replace description from plain text (ADF). |
+| `jira_get_issue` | Compact issue: `key`, `summary`, plain-text `description`, `status`, `attachments`, all comments. Optional **`include_adf`** adds `description_adf` and per-comment **`body_adf`** (raw ADF) for lossless editing. |
+| `jira_add_comment` | Add a comment. **`content_format`**: `plain` (default) or **`adf`** (JSON string of full ADF document). |
+| `jira_update_description` | Replace description; same **`content_format`** as `jira_add_comment`. |
+| `jira_create_issue` | Create an issue: **`project_key`**, **`issue_type`** (name, e.g. `Task`), **`summary`**, optional **`description`** with **`description_content_format`** `plain` or `adf`. |
 | `jira_search` | **JQL** via `POST /rest/api/3/search/jql` (not legacy `/search`). `max_results` (1–100, default 25), `start_at`; response includes `nextPageToken` / `isLast` for pagination. |
 | `confluence_search` | **CQL** search; `limit` (1–100, default 25). |
 | `confluence_get_page` | Page by content id: **trimmed** fields for LLMs — id, title, status, space (key/name), version, `lastUpdated` (when + author display/email), `body.storage` with `char_count_*` and **truncation** after 120k characters, plus `links.webui` / `links.tinyui` only (no full `_links` map). |
