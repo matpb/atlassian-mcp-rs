@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
 };
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -39,8 +39,12 @@ async fn main() {
 
     let mcp_service = StreamableHttpService::new(
         move || Ok(AtlassianMcp::new((*http).clone())),
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        Arc::new(NeverSessionManager::default()),
+        StreamableHttpServerConfig {
+            stateful_mode: false,
+            json_response: true,
+            ..Default::default()
+        },
     );
 
     let app = axum::Router::new()
