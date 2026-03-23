@@ -225,6 +225,9 @@ struct BbCreatePrParams {
     destination_branch: String,
     #[serde(default)]
     close_source_branch: bool,
+    /// Optional list of Bitbucket account UUIDs to add as reviewers.
+    #[serde(default)]
+    reviewers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -309,6 +312,19 @@ struct BbListBranchesParams {
     /// Substring matched with Bitbucket `q=name~\"...\"`
     #[serde(default)]
     name_filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbSearchUsersParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    /// Search term matched against display name and nickname.
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -635,7 +651,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "bitbucket_create_pull_request",
-        description = "Open a pull request from `source_branch` into `destination_branch` in the same repository."
+        description = "Open a pull request from `source_branch` into `destination_branch` in the same repository. Optionally add `reviewers` (list of Bitbucket account UUIDs)."
     )]
     async fn bitbucket_create_pull_request(
         &self,
@@ -653,6 +669,7 @@ impl AtlassianMcp {
                 &p.source_branch,
                 &p.destination_branch,
                 p.close_source_branch,
+                p.reviewers.as_deref(),
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
@@ -1019,6 +1036,30 @@ impl AtlassianMcp {
                 p.merge_strategy.as_deref(),
                 p.close_source_branch,
                 p.message.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_search_users",
+        description = "Search workspace members by display name or nickname. Returns user UUIDs, display names, and nicknames. Use this to look up reviewer UUIDs before adding them to a pull request."
+    )]
+    async fn bitbucket_search_users(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbSearchUsersParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .search_workspace_members(
+                bb_workspace_override(&p.workspace),
+                p.query.as_deref(),
+                p.pagelen,
+                p.page,
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;

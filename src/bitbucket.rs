@@ -162,6 +162,7 @@ impl BitbucketClient {
         source_branch: &str,
         dest_branch: &str,
         close_source_branch: bool,
+        reviewers: Option<&[String]>,
     ) -> Result<Value, String> {
         let title = require_non_empty(title, "title")?;
         let source_branch = require_non_empty(source_branch, "source_branch")?;
@@ -184,6 +185,12 @@ impl BitbucketClient {
             json!({ "branch": { "name": dest_branch } }),
         );
         body.insert("close_source_branch".into(), json!(close_source_branch));
+        if let Some(revs) = reviewers.filter(|r| !r.is_empty()) {
+            body.insert(
+                "reviewers".into(),
+                json!(revs.iter().map(|uuid| json!({"uuid": uuid})).collect::<Vec<_>>()),
+            );
+        }
 
         let req = self
             .http
@@ -555,6 +562,42 @@ impl BitbucketClient {
             .get(&url)
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
+        if let Some(n) = pagelen {
+            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+        }
+        if let Some(p) = page {
+            req = req.query(&[("page", p.to_string())]);
+        }
+        self.send_json_request(req).await
+    }
+
+    // --- Workspace members (user search) ---
+
+    pub async fn search_workspace_members(
+        &self,
+        workspace_override: Option<&str>,
+        query: Option<&str>,
+        pagelen: Option<u32>,
+        page: Option<u32>,
+    ) -> Result<Value, String> {
+        let ws = self.workspace(workspace_override);
+        let url = format!(
+            "{}/workspaces/{}/members",
+            self.api_root,
+            encode_path_segment(ws)
+        );
+        let mut req = self
+            .http
+            .get(&url)
+            .basic_auth(&self.username, Some(&self.app_password))
+            .header("Accept", "application/json");
+        if let Some(q) = query.map(str::trim).filter(|s| !s.is_empty()) {
+            // Bitbucket workspace members supports q= filtering on user fields
+            req = req.query(&[(
+                "q",
+                format!("user.display_name ~ \"{q}\" OR user.nickname ~ \"{q}\""),
+            )]);
+        }
         if let Some(n) = pagelen {
             req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
         }
