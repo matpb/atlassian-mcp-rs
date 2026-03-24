@@ -188,7 +188,11 @@ impl BitbucketClient {
         if let Some(revs) = reviewers.filter(|r| !r.is_empty()) {
             body.insert(
                 "reviewers".into(),
-                json!(revs.iter().map(|uuid| json!({"uuid": uuid})).collect::<Vec<_>>()),
+                json!(
+                    revs.iter()
+                        .map(|uuid| json!({"uuid": uuid}))
+                        .collect::<Vec<_>>()
+                ),
             );
         }
 

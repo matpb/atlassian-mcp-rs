@@ -136,9 +136,7 @@ impl JiraClient {
                 "comments": slim_comments,
             },
         });
-        if include_adf
-            && let Some(obj) = out.as_object_mut()
-        {
+        if include_adf && let Some(obj) = out.as_object_mut() {
             obj.insert(
                 "description_adf".into(),
                 description_adf.unwrap_or(Value::Null),
@@ -497,11 +495,7 @@ impl JiraClient {
             return Err("attachment_id must not be empty".into());
         }
 
-        let url = format!(
-            "{}/attachment/{}",
-            self.api_root,
-            encode_path_segment(id)
-        );
+        let url = format!("{}/attachment/{}", self.api_root, encode_path_segment(id));
 
         let response = self
             .http
