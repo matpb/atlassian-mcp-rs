@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use reqwest::multipart;
 use serde_json::{Value, json};
 
 use crate::credentials::AtlassianCredentials;
@@ -327,6 +328,200 @@ impl JiraClient {
             "isLast": is_last_out,
             "nextPageToken": next_out,
         }))
+    }
+
+    /// Search for Jira users by name or email. Returns accountId (needed for ADF mentions), displayName, emailAddress, and active status.
+    pub async fn search_users(&self, query: &str, max_results: u32) -> Result<Value, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("query must not be empty".into());
+        }
+
+        let url = format!("{}/user/search", self.api_root);
+        let response = self
+            .http
+            .get(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .header("Accept", "application/json")
+            .query(&[
+                ("query", query),
+                ("maxResults", &max_results.clamp(1, 50).to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Jira request failed: {e}"))?;
+
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(format!("Jira returned {status}: {msg}"));
+        }
+
+        let users: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))?;
+
+        let slimmed = users
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|u| {
+                        let obj = u.as_object()?;
+                        Some(json!({
+                            "accountId": obj.get("accountId")?,
+                            "displayName": obj.get("displayName").unwrap_or(&Value::Null),
+                            "emailAddress": obj.get("emailAddress").unwrap_or(&Value::Null),
+                            "active": obj.get("active").unwrap_or(&Value::Null),
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(json!({
+            "users": slimmed,
+            "total": slimmed.len(),
+        }))
+    }
+
+    /// List attachments on a Jira issue.
+    pub async fn list_attachments(&self, issue_key: &str) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/issue/{}?fields=attachment",
+            self.api_root,
+            encode_path_segment(key)
+        );
+        let issue: Value = self.get_json(&url).await?;
+
+        let attachments = issue
+            .get("fields")
+            .and_then(|f| f.get("attachment"))
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.as_object().map(slim_attachment))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(json!({
+            "key": key,
+            "attachments": attachments,
+            "total": attachments.len(),
+        }))
+    }
+
+    /// Upload a file attachment to a Jira issue. File content is provided as raw bytes.
+    pub async fn add_attachment(
+        &self,
+        issue_key: &str,
+        filename: &str,
+        file_bytes: Vec<u8>,
+    ) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+        let filename = filename.trim();
+        if filename.is_empty() {
+            return Err("filename must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/issue/{}/attachments",
+            self.api_root,
+            encode_path_segment(key)
+        );
+
+        let part = multipart::Part::bytes(file_bytes)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")
+            .map_err(|e| format!("Invalid MIME type: {e}"))?;
+
+        let form = multipart::Form::new().part("file", part);
+
+        let response = self
+            .http
+            .post(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .header("Accept", "application/json")
+            .header("X-Atlassian-Token", "no-check")
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Jira attachment upload failed: {e}"))?;
+
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(format!("Jira returned {status}: {msg}"));
+        }
+
+        let attachments: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))?;
+
+        // Jira returns an array of created attachments; slim them down
+        let slimmed = attachments
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.as_object().map(slim_attachment))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(json!({
+            "ok": true,
+            "attachments": slimmed,
+        }))
+    }
+
+    /// Delete a Jira attachment by its ID.
+    pub async fn delete_attachment(&self, attachment_id: &str) -> Result<Value, String> {
+        let id = attachment_id.trim();
+        if id.is_empty() {
+            return Err("attachment_id must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/attachment/{}",
+            self.api_root,
+            encode_path_segment(id)
+        );
+
+        let response = self
+            .http
+            .delete(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .send()
+            .await
+            .map_err(|e| format!("Jira request failed: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(format!("Jira returned {status}: {msg}"));
+        }
+
+        Ok(json!({ "ok": true }))
     }
 
     async fn get_json(&self, url: &str) -> Result<Value, String> {

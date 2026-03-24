@@ -125,6 +125,41 @@ fn default_max_results() -> u32 {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct SearchUsersParams {
+    /// Search term matched against user display name and email address
+    query: String,
+    /// Maximum users to return (1–50, default 10)
+    #[serde(default = "default_user_search_max")]
+    max_results: u32,
+}
+
+fn default_user_search_max() -> u32 {
+    10
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ListAttachmentsParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddAttachmentParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// File name including extension, e.g. `report.pdf`
+    filename: String,
+    /// File content as a **base64-encoded** string
+    file_base64: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DeleteAttachmentParams {
+    /// Jira attachment ID (numeric string), as returned by `jira_list_attachments` or `jira_get_issue`
+    attachment_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ConfluenceSearchParams {
     /// Confluence Query Language string, e.g. `type=page and space=TEAM`
     cql: String,
@@ -376,7 +411,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_add_comment",
-        description = "Add a comment on a Jira issue. Jira stores the body as Atlassian Document Format (ADF). Use content_format=plain (default) for simple text (line breaks become paragraphs). Use content_format=adf and pass a JSON **string** of a full ADF document {\"type\":\"doc\",\"version\":1,\"content\":[...]} for headings, bullet/ordered lists, links, code blocks, mentions, etc. See Atlassian Jira ADF structure docs."
+        description = "Add a comment on a Jira issue. Jira stores the body as Atlassian Document Format (ADF). Use content_format=plain (default) for simple text (line breaks become paragraphs). Use content_format=adf and pass a JSON **string** of a full ADF document {\"type\":\"doc\",\"version\":1,\"content\":[...]} for headings, bullet/ordered lists, links, code blocks, mentions, etc. Prefer ADF over plain text for better structure, formatting, and @mention support. See Atlassian Jira ADF structure docs."
     )]
     async fn jira_add_comment(
         &self,
@@ -398,7 +433,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_update_description",
-        description = "Replace the Jira issue description. Same content_format semantics as jira_add_comment: plain (default) wraps text as ADF paragraphs; adf accepts a JSON string of a full ADF document for rich formatting compatible with Jira Cloud REST API v3."
+        description = "Replace the Jira issue description. Same content_format semantics as jira_add_comment: plain (default) wraps text as ADF paragraphs; adf accepts a JSON string of a full ADF document for rich formatting compatible with Jira Cloud REST API v3. Prefer ADF over plain text for better structure and formatting."
     )]
     async fn jira_update_description(
         &self,
@@ -420,7 +455,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_create_issue",
-        description = "Create a Jira issue (POST /rest/api/3/issue): project_key, issue_type name (e.g. Task), summary, and optional description. Optional description uses description_content_format plain (default) or adf (JSON string of full ADF document). Same ADF rules as jira_add_comment."
+        description = "Create a Jira issue (POST /rest/api/3/issue): project_key, issue_type name (e.g. Task), summary, and optional description. Optional description uses description_content_format plain (default) or adf (JSON string of full ADF document). Same ADF rules as jira_add_comment. Prefer ADF over plain text for better structure and formatting."
     )]
     async fn jira_create_issue(
         &self,
@@ -459,6 +494,93 @@ impl AtlassianMcp {
         let jira = JiraClient::new(self.http.clone(), &creds);
         let value = jira
             .search_jql(&p.jql, p.max_results, p.start_at)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_search_users",
+        description = "Search for Jira users by name or email. Returns accountId (needed for ADF @mentions), displayName, emailAddress, and active status. Use accountId in ADF mention nodes: {\"type\":\"mention\",\"attrs\":{\"id\":\"<accountId>\",\"text\":\"@DisplayName\"}}."
+    )]
+    async fn jira_search_users(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<SearchUsersParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .search_users(&p.query, p.max_results)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_list_attachments",
+        description = "List all attachments on a Jira issue. Returns attachment id, filename, mimeType, size, download URL, created date, and author."
+    )]
+    async fn jira_list_attachments(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<ListAttachmentsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .list_attachments(&p.issue_key)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_add_attachment",
+        description = "Upload a file attachment to a Jira issue. The file content must be provided as a base64-encoded string. Returns the created attachment metadata."
+    )]
+    async fn jira_add_attachment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<AddAttachmentParams>,
+    ) -> Result<String, ErrorData> {
+        use base64::Engine;
+        let file_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&p.file_base64)
+            .map_err(|e| {
+                ErrorData::invalid_request(format!("Invalid base64 in file_base64: {e}"), None)
+            })?;
+
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .add_attachment(&p.issue_key, &p.filename, file_bytes)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_delete_attachment",
+        description = "Delete an attachment from Jira by its attachment ID. Use jira_list_attachments or jira_get_issue to find attachment IDs."
+    )]
+    async fn jira_delete_attachment(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<DeleteAttachmentParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .delete_attachment(&p.attachment_id)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
