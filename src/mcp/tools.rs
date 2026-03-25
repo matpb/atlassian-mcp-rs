@@ -160,6 +160,20 @@ struct DeleteAttachmentParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct GetTransitionsParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TransitionIssueParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// Transition ID (get available IDs from `jira_get_transitions`)
+    transition_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ConfluenceSearchParams {
     /// Confluence Query Language string, e.g. `type=page and space=TEAM`
     cql: String,
@@ -474,6 +488,46 @@ impl AtlassianMcp {
         };
         let value = jira
             .create_issue(&p.project_key, &p.issue_type, &p.summary, desc)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_get_transitions",
+        description = "List available transitions for a Jira issue. Returns transition IDs and target status names. Use the transition ID with `jira_transition_issue` to move an issue to a new status."
+    )]
+    async fn jira_get_transitions(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<GetTransitionsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .get_transitions(&p.issue_key)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_transition_issue",
+        description = "Transition a Jira issue to a new status. Requires a transition_id obtained from `jira_get_transitions`. This changes the issue's workflow status (e.g. To Do → In Progress → Done)."
+    )]
+    async fn jira_transition_issue(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<TransitionIssueParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .transition_issue(&p.issue_key, &p.transition_id)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 

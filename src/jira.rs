@@ -518,6 +518,101 @@ impl JiraClient {
         Ok(json!({ "ok": true }))
     }
 
+    /// List available transitions for a Jira issue.
+    pub async fn get_transitions(&self, issue_key: &str) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/issue/{}/transitions",
+            self.api_root,
+            encode_path_segment(key)
+        );
+        let raw: Value = self.get_json(&url).await?;
+
+        let transitions = raw
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| {
+                        let obj = t.as_object()?;
+                        Some(json!({
+                            "id": obj.get("id").and_then(|x| x.as_str()),
+                            "name": obj.get("name").and_then(|x| x.as_str()),
+                            "to": obj.get("to").map(slim_status),
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(json!({
+            "key": key,
+            "transitions": transitions,
+        }))
+    }
+
+    /// Transition a Jira issue to a new status.
+    pub async fn transition_issue(
+        &self,
+        issue_key: &str,
+        transition_id: &str,
+    ) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+        let tid = transition_id.trim();
+        if tid.is_empty() {
+            return Err("transition_id must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/issue/{}/transitions",
+            self.api_root,
+            encode_path_segment(key)
+        );
+        let payload = json!({
+            "transition": { "id": tid }
+        });
+
+        self.post_json_no_content(&url, &payload).await
+    }
+
+    /// POST that accepts 204 No Content (used by transitions endpoint).
+    async fn post_json_no_content(&self, url: &str, payload: &Value) -> Result<Value, String> {
+        let response = self
+            .http
+            .post(url)
+            .basic_auth(&self.email, Some(&self.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(payload)
+            .send()
+            .await
+            .map_err(|e| format!("Jira request failed: {e}"))?;
+
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+
+        if !status.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(format!("Jira returned {status}: {msg}"));
+        }
+
+        if bytes.is_empty() {
+            return Ok(json!({ "ok": true }));
+        }
+
+        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
+    }
+
     async fn get_json(&self, url: &str) -> Result<Value, String> {
         let response = self
             .http
