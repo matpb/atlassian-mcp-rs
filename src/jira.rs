@@ -555,6 +555,34 @@ impl JiraClient {
         }))
     }
 
+    /// Set the assignee for a Jira issue. `account_id`:
+    /// - `Some("<accountId>")` assigns that user
+    /// - `Some("-1")` uses the project's default assignee
+    /// - `None` unassigns the issue (sends `null`)
+    pub async fn set_assignee(
+        &self,
+        issue_key: &str,
+        account_id: Option<&str>,
+    ) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+
+        let url = format!(
+            "{}/issue/{}/assignee",
+            self.api_root,
+            encode_path_segment(key)
+        );
+        let account_value = match account_id.map(str::trim) {
+            None | Some("") => Value::Null,
+            Some(id) => Value::String(id.to_string()),
+        };
+        let payload = json!({ "accountId": account_value });
+
+        self.put_json(&url, &payload).await
+    }
+
     /// Transition a Jira issue to a new status.
     pub async fn transition_issue(
         &self,

@@ -158,7 +158,14 @@ To **read** rich content without losing structure, call **`jira_get_issue`** wit
 | `jira_add_comment` | Add a comment. **`content_format`**: `plain` (default) or **`adf`** (JSON string of full ADF document). |
 | `jira_update_description` | Replace description; same **`content_format`** as `jira_add_comment`. |
 | `jira_create_issue` | Create an issue: **`project_key`**, **`issue_type`** (name, e.g. `Task`), **`summary`**, optional **`description`** with **`description_content_format`** `plain` or `adf`. |
+| `jira_set_assignee` | Assign an issue via `PUT /rest/api/3/issue/{key}/assignee`. Pass **`account_id`** from `jira_search_users`; `"-1"` uses the project default; omit or pass `null` to unassign. |
+| `jira_get_transitions` | List available workflow transitions for an issue — returns each transition's `id`, `name`, and target status. Feed the id into `jira_transition_issue`. |
+| `jira_transition_issue` | Move an issue to a new status using a **`transition_id`** from `jira_get_transitions` (e.g. To Do → In Progress → Done). |
 | `jira_search` | **JQL** via `POST /rest/api/3/search/jql` (not legacy `/search`). `max_results` (1–100, default 25), `start_at`; response includes `nextPageToken` / `isLast` for pagination. |
+| `jira_search_users` | Search users by name or email. Returns `accountId` (needed for ADF `@`-mentions and `jira_set_assignee`), `displayName`, `emailAddress`, `active`. |
+| `jira_list_attachments` | List attachments on an issue: id, filename, `mimeType`, size, download URL, created date, author. |
+| `jira_add_attachment` | Upload a file to an issue. **`filename`** + **`file_base64`** (base64-encoded content). Returns attachment metadata. |
+| `jira_delete_attachment` | Delete an attachment by **`attachment_id`** (from `jira_list_attachments` or `jira_get_issue`). |
 | `confluence_search` | **CQL** search; `limit` (1–100, default 25). |
 | `confluence_get_page` | Page by content id: **trimmed** fields for LLMs — id, title, status, space (key/name), version, `lastUpdated` (when + author display/email), `body.storage` with `char_count_*` and **truncation** after 120k characters, plus `links.webui` / `links.tinyui` only (no full `_links` map). |
 
@@ -173,7 +180,8 @@ Most tools accept optional `workspace` (overrides `X-Bitbucket-Workspace`) and, 
 | `bitbucket_list_branches` | `refs/branches`; optional `name_filter` (substring, Bitbucket `q=name~"..."`). |
 | `bitbucket_list_pull_requests` | List PRs; optional `state` (`OPEN`, `MERGED`, `DECLINED`, `SUPERSEDED`). |
 | `bitbucket_get_pull_request` | Single PR by `pull_request_id`. |
-| `bitbucket_create_pull_request` | Open a PR: `title`, `source_branch`, `destination_branch`, optional `description`, `close_source_branch`. |
+| `bitbucket_create_pull_request` | Open a PR: `title`, `source_branch`, `destination_branch`, optional `description`, `close_source_branch`, and `reviewers` (list of account UUIDs from `bitbucket_search_users`). |
+| `bitbucket_search_users` | Search workspace members by display name or nickname — returns `uuid`, `display_name`, `nickname` for use as PR reviewers. |
 | `bitbucket_get_pull_request_diff` | Full unified diff as JSON `{ "diff": "..." }`. |
 | `bitbucket_get_pull_request_diffstat` | Per-file diff stats (`diffstat`). |
 | `bitbucket_list_pull_request_comments` | PR comments (paginated). |

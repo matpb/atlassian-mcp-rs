@@ -174,6 +174,17 @@ struct TransitionIssueParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct SetAssigneeParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// Atlassian accountId of the user to assign. Obtain from `jira_search_users`.
+    /// Pass `"-1"` to use the project's default assignee.
+    /// Omit or pass `null` to unassign the issue.
+    #[serde(default)]
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct ConfluenceSearchParams {
     /// Confluence Query Language string, e.g. `type=page and space=TEAM`
     cql: String,
@@ -528,6 +539,26 @@ impl AtlassianMcp {
         let jira = JiraClient::new(self.http.clone(), &creds);
         let value = jira
             .transition_issue(&p.issue_key, &p.transition_id)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_set_assignee",
+        description = "Set the assignee for a Jira issue via PUT /rest/api/3/issue/{key}/assignee. Pass the assignee's Atlassian accountId (look up with `jira_search_users`). Pass `\"-1\"` to use the project's default assignee. Omit `account_id` (or pass null) to unassign the issue."
+    )]
+    async fn jira_set_assignee(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<SetAssigneeParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .set_assignee(&p.issue_key, p.account_id.as_deref())
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
