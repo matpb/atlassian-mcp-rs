@@ -181,6 +181,7 @@ Most tools accept optional `workspace` (overrides `X-Bitbucket-Workspace`) and, 
 | `bitbucket_list_pull_requests` | List PRs; optional `state` (`OPEN`, `MERGED`, `DECLINED`, `SUPERSEDED`). |
 | `bitbucket_get_pull_request` | Single PR by `pull_request_id`. |
 | `bitbucket_create_pull_request` | Open a PR: `title`, `source_branch`, `destination_branch`, optional `description`, `close_source_branch`, and `reviewers` (list of account UUIDs from `bitbucket_search_users`). |
+| `bitbucket_update_pull_request` | Edit a PR: `description` and/or `title`. Read-modify-write, not a patch: Bitbucket replaces what it receives and resets what it does not, so the tool GETs the PR and re-sends the current title, description, reviewers, destination branch and `close_source_branch` for omitted fields. A supplied `description` overwrites the whole body; empty string clears it. |
 | `bitbucket_search_users` | Search workspace members by display name or nickname — returns `uuid`, `display_name`, `nickname` for use as PR reviewers. |
 | `bitbucket_get_pull_request_diff` | Full unified diff as JSON `{ "diff": "..." }`. |
 | `bitbucket_get_pull_request_diffstat` | Per-file diff stats (`diffstat`). |

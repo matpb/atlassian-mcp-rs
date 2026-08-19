@@ -291,6 +291,21 @@ struct BbCreatePrParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct BbUpdatePrParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    pull_request_id: u32,
+    /// Full replacement PR description in markdown; it overwrites the existing body
+    /// rather than appending to it. Empty string clears the body, omit to keep it as-is.
+    #[serde(default)]
+    description: Option<String>,
+    /// Full replacement PR title. Omit to leave the title unchanged.
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct BbPrCommentIdParams {
     #[serde(default)]
     workspace: Option<String>,
@@ -877,6 +892,31 @@ impl AtlassianMcp {
                 &p.destination_branch,
                 p.close_source_branch,
                 p.reviewers.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_update_pull_request",
+        description = "Edit a pull request's `description` and/or `title`. NOT a patch: Bitbucket's update endpoint REPLACES the fields it receives and resets the ones it doesn't, so this tool GETs the PR first and re-sends its current title, description, reviewers, destination branch and close_source_branch for whatever you omit. Consequences: (1) `description` REPLACES the whole existing body, it is not appended to, so read the PR with `bitbucket_get_pull_request` first if you mean to keep any of the old text; (2) an empty-string `description` clears the body; (3) omitting a field leaves it as-is, but because the carried-over values are read moments before the write, a concurrent edit in the Bitbucket UI can be overwritten."
+    )]
+    async fn bitbucket_update_pull_request(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbUpdatePrParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .update_pull_request(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pull_request_id,
+                p.title.as_deref(),
+                p.description.as_deref(),
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;

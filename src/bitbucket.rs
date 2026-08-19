@@ -207,6 +207,81 @@ impl BitbucketClient {
         self.send_json_request(req).await
     }
 
+    pub async fn update_pull_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        pull_request_id: u32,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Value, String> {
+        let title = title.map(|t| require_non_empty(t, "title")).transpose()?;
+        if title.is_none() && description.is_none() {
+            return Err("at least one of title or description must be provided".to_string());
+        }
+
+        // Bitbucket's PUT replaces the fields it receives and resets the ones it doesn't, so
+        // every mutable field has to be carried over from the current PR, not just the edited one.
+        let current = self
+            .get_pull_request(workspace_override, repo_slug, pull_request_id)
+            .await?;
+
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let url = format!("{base}/pullrequests/{pull_request_id}");
+
+        let mut body = serde_json::Map::new();
+        let title = match title {
+            Some(t) => t,
+            None => current
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or("could not read the current pull request title")?
+                .to_string(),
+        };
+        body.insert("title".into(), json!(title));
+
+        let description = match description {
+            Some(d) => d.to_string(),
+            None => current
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        };
+        body.insert("description".into(), json!(description));
+
+        if let Some(revs) = current.get("reviewers").and_then(Value::as_array) {
+            let mut reviewers = Vec::with_capacity(revs.len());
+            for r in revs {
+                let uuid = r.get("uuid").and_then(Value::as_str).ok_or(
+                    "a current reviewer has no uuid; refusing to update and drop reviewers",
+                )?;
+                reviewers.push(json!({ "uuid": uuid }));
+            }
+            body.insert("reviewers".into(), json!(reviewers));
+        }
+
+        if let Some(dest) = current
+            .pointer("/destination/branch/name")
+            .and_then(Value::as_str)
+        {
+            body.insert("destination".into(), json!({ "branch": { "name": dest } }));
+        }
+        if let Some(close) = current.get("close_source_branch").and_then(Value::as_bool) {
+            body.insert("close_source_branch".into(), json!(close));
+        }
+
+        let req = self
+            .http
+            .put(&url)
+            .basic_auth(&self.username, Some(&self.app_password))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&Value::Object(body));
+
+        self.send_json_request(req).await
+    }
+
     pub async fn get_pull_request_diff(
         &self,
         workspace_override: Option<&str>,
