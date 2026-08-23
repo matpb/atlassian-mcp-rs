@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://www.rust-lang.org/)
 
-Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3), **Confluence** (REST API under `/wiki`), and **Bitbucket** ([REST API 2.0](https://developer.atlassian.com/cloud/bitbucket/rest/intro/)) — using **streamable HTTP** (`rmcp` + Axum). Jira and Confluence use **HTTP Basic** with `email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Bitbucket uses **HTTP Basic** with your Bitbucket **username** + [app password](https://support.atlassian.com/bitbucket-cloud/docs/app-passwords/) (not the Jira/Confluence API token).
+Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3), **Confluence** (REST API under `/wiki`), and **Bitbucket** ([REST API 2.0](https://developer.atlassian.com/cloud/bitbucket/rest/intro/)) — using **streamable HTTP** (`rmcp` + Axum). Jira and Confluence use **HTTP Basic** with `email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Bitbucket also uses **HTTP Basic**, with your Atlassian account **email** + an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) scoped for Bitbucket. App passwords were retired by Atlassian in July 2026; the `X-Bitbucket-App-Password` header name is kept for backwards compatibility, but the value it expects is an API token.
 
 ## Authentication (required headers)
 
@@ -37,8 +37,8 @@ Bitbucket credentials are also taken **only** from HTTP headers (not from the se
 | Header | Value |
 |--------|--------|
 | `X-Bitbucket-Workspace` | Workspace slug (e.g. `acme`) |
-| `X-Bitbucket-Username` | Bitbucket account username (used with app password) |
-| `X-Bitbucket-App-Password` | [App password](https://support.atlassian.com/bitbucket-cloud/docs/app-passwords/) with appropriate scopes |
+| `X-Bitbucket-Username` | Atlassian account **email** (not the Bitbucket username) |
+| `X-Bitbucket-App-Password` | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) with Bitbucket read/write repository scopes. Legacy header name; app passwords are retired |
 
 Optional:
 
@@ -123,8 +123,8 @@ Use your MCP client to send the three `X-Atlassian-*` headers on **every** MCP r
         "X-Atlassian-Email": "${ATLASSIAN_EMAIL}",
         "X-Atlassian-Api-Token": "${ATLASSIAN_API_TOKEN}",
         "X-Bitbucket-Workspace": "${BITBUCKET_WORKSPACE}",
-        "X-Bitbucket-Username": "${BITBUCKET_USERNAME}",
-        "X-Bitbucket-App-Password": "${BITBUCKET_APP_PASSWORD}"
+        "X-Bitbucket-Username": "${ATLASSIAN_EMAIL}",
+        "X-Bitbucket-App-Password": "${BITBUCKET_API_TOKEN}"
       }
     }
   }
