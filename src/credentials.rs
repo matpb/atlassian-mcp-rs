@@ -36,7 +36,7 @@ impl AtlassianCredentials {
     }
 }
 
-/// Bitbucket Cloud REST API 2.0 (or compatible base URL) via HTTP Basic: username + app password.
+/// Bitbucket Cloud REST API 2.0 (or compatible base URL) via HTTP Basic: Atlassian account email + API token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BitbucketCredentials {
     /// API root including `/2.0`, e.g. `https://api.bitbucket.org/2.0`
@@ -127,6 +127,8 @@ const BB_BASE: &str = "x-bitbucket-base-url";
 const BB_WORKSPACE: &str = "x-bitbucket-workspace";
 const BB_USER: &str = "x-bitbucket-username";
 const BB_APP_PW: &str = "x-bitbucket-app-password";
+/// Preferred name for the same value. Atlassian retired app passwords 2026-07-28.
+const BB_API_TOKEN: &str = "x-bitbucket-api-token";
 
 /// Default Bitbucket Cloud REST root when `X-Bitbucket-Base-Url` is omitted.
 pub const BITBUCKET_CLOUD_API_2_0: &str = "https://api.bitbucket.org/2.0";
@@ -138,7 +140,8 @@ pub fn resolve_bitbucket_credentials(parts: &Parts) -> Result<BitbucketCredentia
         header_trimmed(headers, BB_BASE).unwrap_or_else(|| BITBUCKET_CLOUD_API_2_0.to_string());
     let workspace = header_trimmed(headers, BB_WORKSPACE);
     let username = header_trimmed(headers, BB_USER);
-    let app_password = header_trimmed(headers, BB_APP_PW);
+    let app_password =
+        header_trimmed(headers, BB_API_TOKEN).or_else(|| header_trimmed(headers, BB_APP_PW));
 
     match (&workspace, &username, &app_password) {
         (Some(w), Some(u), Some(p)) => Ok(BitbucketCredentials::new(
@@ -148,7 +151,7 @@ pub fn resolve_bitbucket_credentials(parts: &Parts) -> Result<BitbucketCredentia
             p.clone(),
         )),
         (None, None, None) => Err(
-            "Missing required Bitbucket credential HTTP headers. Send X-Bitbucket-Workspace, X-Bitbucket-Username, and X-Bitbucket-App-Password on every MCP request that uses Bitbucket tools (JSON-RPC error code -32600 Invalid Request)."
+            "Missing required Bitbucket credential HTTP headers. Send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email) and X-Bitbucket-Api-Token (legacy alias: X-Bitbucket-App-Password) on every MCP request that uses Bitbucket tools (JSON-RPC error code -32600 Invalid Request)."
                 .into(),
         ),
         _ => {
@@ -160,7 +163,7 @@ pub fn resolve_bitbucket_credentials(parts: &Parts) -> Result<BitbucketCredentia
                 missing.push("X-Bitbucket-Username");
             }
             if app_password.is_none() {
-                missing.push("X-Bitbucket-App-Password");
+                missing.push("X-Bitbucket-Api-Token (or legacy X-Bitbucket-App-Password)");
             }
             Err(format!(
                 "Incomplete Bitbucket credential headers (JSON-RPC -32600). Missing: {}.",
@@ -260,6 +263,40 @@ mod tests {
         assert_eq!(c.workspace, "acme");
         assert_eq!(c.username, "stub_bb_user_001");
         assert_eq!(c.base_api_url, BITBUCKET_CLOUD_API_2_0);
+    }
+
+    #[test]
+    fn bitbucket_resolve_accepts_api_token_header() {
+        let parts = parts_with_headers([
+            ("X-Bitbucket-Workspace", "acme"),
+            ("X-Bitbucket-Username", "stub_bb_user_001"),
+            ("X-Bitbucket-Api-Token", "stub_bb_header_second_002"),
+        ]);
+        let c = resolve_bitbucket_credentials(&parts).unwrap();
+        assert_eq!(c.app_password, "stub_bb_header_second_002");
+    }
+
+    #[test]
+    fn bitbucket_api_token_header_wins_over_legacy_app_password() {
+        let parts = parts_with_headers([
+            ("X-Bitbucket-Workspace", "acme"),
+            ("X-Bitbucket-Username", "stub_bb_user_001"),
+            ("X-Bitbucket-App-Password", "stub_bb_header_second_001"),
+            ("X-Bitbucket-Api-Token", "stub_bb_header_second_002"),
+        ]);
+        let c = resolve_bitbucket_credentials(&parts).unwrap();
+        assert_eq!(c.app_password, "stub_bb_header_second_002");
+    }
+
+    #[test]
+    fn bitbucket_missing_token_names_both_header_spellings() {
+        let parts = parts_with_headers([
+            ("X-Bitbucket-Workspace", "acme"),
+            ("X-Bitbucket-Username", "stub_bb_user_001"),
+        ]);
+        let err = resolve_bitbucket_credentials(&parts).unwrap_err();
+        assert!(err.contains("X-Bitbucket-Api-Token"));
+        assert!(err.contains("X-Bitbucket-App-Password"));
     }
 
     #[test]

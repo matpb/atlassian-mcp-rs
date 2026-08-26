@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://www.rust-lang.org/)
 
-Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3), **Confluence** (REST API under `/wiki`), and **Bitbucket** ([REST API 2.0](https://developer.atlassian.com/cloud/bitbucket/rest/intro/)) — using **streamable HTTP** (`rmcp` + Axum). Jira and Confluence use **HTTP Basic** with `email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Bitbucket also uses **HTTP Basic**, with your Atlassian account **email** + an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) scoped for Bitbucket. App passwords were retired by Atlassian in July 2026; the `X-Bitbucket-App-Password` header name is kept for backwards compatibility, but the value it expects is an API token.
+Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Atlassian Cloud** — **Jira** (REST API v3), **Confluence** (REST API under `/wiki`), and **Bitbucket** ([REST API 2.0](https://developer.atlassian.com/cloud/bitbucket/rest/intro/)) — using **streamable HTTP** (`rmcp` + Axum). Jira and Confluence use **HTTP Basic** with `email` + [API token](https://id.atlassian.com/manage-profile/security/api-tokens). Bitbucket also uses **HTTP Basic**, with your Atlassian account **email** + an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) scoped for Bitbucket. App passwords were retired by Atlassian in July 2026, so the credential header is `X-Bitbucket-Api-Token`; the older `X-Bitbucket-App-Password` name is still accepted for backwards compatibility.
 
 ## Authentication (required headers)
 
@@ -28,7 +28,7 @@ If Confluence is on a **different** Cloud site, set:
 |--------|--------|
 | `X-Atlassian-Confluence-Site-Url` | `https://other-site.atlassian.net` |
 
-Confluence calls then use `{that}/wiki/rest/api`; Jira still uses `{X-Atlassian-Site-Url}/rest/api/3`.
+Confluence calls then use `{that}/wiki/rest/api` (and `{that}/wiki/api/v2` for the v2 endpoints `confluence_create_page` uses); Jira still uses `{X-Atlassian-Site-Url}/rest/api/3`.
 
 ### Bitbucket (required headers for Bitbucket tools)
 
@@ -38,7 +38,10 @@ Bitbucket credentials are also taken **only** from HTTP headers (not from the se
 |--------|--------|
 | `X-Bitbucket-Workspace` | Workspace slug (e.g. `acme`) |
 | `X-Bitbucket-Username` | Atlassian account **email** (not the Bitbucket username) |
-| `X-Bitbucket-App-Password` | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) with Bitbucket read/write repository scopes. Legacy header name; app passwords are retired |
+| `X-Bitbucket-Api-Token` | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) with Bitbucket read/write repository scopes |
+| `X-Bitbucket-App-Password` | **Legacy alias** for `X-Bitbucket-Api-Token`, still accepted so existing configs keep working. App passwords themselves were retired by Atlassian in July 2026 — the value must be an API token either way. If both headers are sent, `X-Bitbucket-Api-Token` wins |
+
+> **Do not** put `x-bitbucket-api-token-auth` in `X-Bitbucket-Username`. That static username is correct for git-over-HTTPS but the REST API rejects it with `401 API token must be used with an atlassian registered email`. This server only speaks REST, so the username must be your Atlassian account email.
 
 Optional:
 
@@ -124,7 +127,7 @@ Use your MCP client to send the three `X-Atlassian-*` headers on **every** MCP r
         "X-Atlassian-Api-Token": "${ATLASSIAN_API_TOKEN}",
         "X-Bitbucket-Workspace": "${BITBUCKET_WORKSPACE}",
         "X-Bitbucket-Username": "${ATLASSIAN_EMAIL}",
-        "X-Bitbucket-App-Password": "${BITBUCKET_API_TOKEN}"
+        "X-Bitbucket-Api-Token": "${BITBUCKET_API_TOKEN}"
       }
     }
   }
@@ -161,12 +164,14 @@ To **read** rich content without losing structure, call **`jira_get_issue`** wit
 | `jira_set_assignee` | Assign an issue via `PUT /rest/api/3/issue/{key}/assignee`. Pass **`account_id`** from `jira_search_users`; `"-1"` uses the project default; omit or pass `null` to unassign. |
 | `jira_get_transitions` | List available workflow transitions for an issue — returns each transition's `id`, `name`, and target status. Feed the id into `jira_transition_issue`. |
 | `jira_transition_issue` | Move an issue to a new status using a **`transition_id`** from `jira_get_transitions` (e.g. To Do → In Progress → Done). |
+| `jira_get_issue_history` | Issue changelog via `GET /rest/api/3/issue/{key}/changelog`: who changed which field, `from` → `to`, and when. Optional **`field`** narrows it to one field (`status` for the workflow timeline, `assignee` for reassignments); `max_results` (1–100, default 50), `start_at`. Timestamps come back verbatim from Jira **including its UTC offset** — do not assume they are local time. |
 | `jira_search` | **JQL** via `POST /rest/api/3/search/jql` (not legacy `/search`). `max_results` (1–100, default 25), `start_at`; response includes `nextPageToken` / `isLast` for pagination. |
 | `jira_search_users` | Search users by name or email. Returns `accountId` (needed for ADF `@`-mentions and `jira_set_assignee`), `displayName`, `emailAddress`, `active`. |
 | `jira_list_attachments` | List attachments on an issue: id, filename, `mimeType`, size, download URL, created date, author. |
 | `jira_add_attachment` | Upload a file to an issue. **`filename`** + **`file_base64`** (base64-encoded content). Returns attachment metadata. |
 | `jira_delete_attachment` | Delete an attachment by **`attachment_id`** (from `jira_list_attachments` or `jira_get_issue`). |
 | `confluence_search` | **CQL** search; `limit` (1–100, default 25). |
+| `confluence_create_page` | Create a page via the **v2 API** (`POST /wiki/api/v2/pages`): **`space_id`** (numeric id or space key, e.g. `SIKU`), **`title`**, **`body`**, optional **`body_format`** `storage` (Confluence XHTML, default) or `wiki`, **`parent_id`** (omit for top-level), **`status`** `current` (default) or `draft`. Returns id, title, status and the webui link. |
 | `confluence_get_page` | Page by content id: **trimmed** fields for LLMs — id, title, status, space (key/name), version, `lastUpdated` (when + author display/email), `body.storage` with `char_count_*` and **truncation** after 120k characters, plus `links.webui` / `links.tinyui` only (no full `_links` map). |
 
 ### Bitbucket (REST 2.0–compatible)

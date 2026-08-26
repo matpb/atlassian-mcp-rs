@@ -160,6 +160,25 @@ struct DeleteAttachmentParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct GetChangelogParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// Only return changes to this field, e.g. `status`, `assignee`, `Sprint`. Omit for every field.
+    #[serde(default)]
+    field: Option<String>,
+    /// Maximum change entries to return (1–100, default 50)
+    #[serde(default = "default_changelog_max")]
+    max_results: u32,
+    /// Pagination offset into the changelog (default 0, oldest first)
+    #[serde(default)]
+    start_at: u32,
+}
+
+fn default_changelog_max() -> u32 {
+    50
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct GetTransitionsParams {
     /// Jira issue key, e.g. `PROJ-123`
     issue_key: String,
@@ -542,6 +561,26 @@ impl AtlassianMcp {
     }
 
     #[tool(
+        name = "jira_get_issue_history",
+        description = "Fetch a Jira issue's change history (changelog): who changed what field, from what value to what, and when. Optional `field` narrows it to one field, e.g. `status` to get the full workflow timeline or `assignee` to see reassignments. Timestamps are returned verbatim from Jira, including its UTC offset. Use this rather than JQL when you need to prove who transitioned an issue and when."
+    )]
+    async fn jira_get_issue_history(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<GetChangelogParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .get_changelog(&p.issue_key, p.field.as_deref(), p.max_results, p.start_at)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
         name = "jira_transition_issue",
         description = "Transition a Jira issue to a new status. Requires a transition_id obtained from `jira_get_transitions`. This changes the issue's workflow status (e.g. To Do → In Progress → Done)."
     )]
@@ -757,7 +796,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "bitbucket_list_repositories",
-        description = "List repositories in a Bitbucket workspace (Cloud REST 2.0). Requires X-Bitbucket-Workspace, X-Bitbucket-Username, X-Bitbucket-App-Password; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0). Optional `workspace` overrides the header."
+        description = "List repositories in a Bitbucket workspace (Cloud REST 2.0). Requires X-Bitbucket-Workspace, X-Bitbucket-Username, X-Bitbucket-Api-Token (legacy alias: X-Bitbucket-App-Password); optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0). Optional `workspace` overrides the header."
     )]
     async fn bitbucket_list_repositories(
         &self,
@@ -1321,7 +1360,7 @@ impl ServerHandler for AtlassianMcp {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email), X-Bitbucket-App-Password (an Atlassian API token with Bitbucket repository scopes -- legacy header name, app passwords are retired) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace."
+            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email -- NOT the Bitbucket username and NOT x-bitbucket-api-token-auth, which the REST API rejects), X-Bitbucket-Api-Token (an Atlassian API token with Bitbucket repository scopes; the legacy name X-Bitbucket-App-Password is still accepted) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace."
                 .to_string(),
         );
         info

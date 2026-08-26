@@ -555,6 +555,115 @@ impl JiraClient {
         }))
     }
 
+    /// Fetch an issue's change history (`GET /rest/api/3/issue/{key}/changelog`).
+    /// `field` filters to one changed field name (e.g. `status`); `None` returns every change.
+    pub async fn get_changelog(
+        &self,
+        issue_key: &str,
+        field: Option<&str>,
+        max_results: u32,
+        start_at: u32,
+    ) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+        let max = max_results.clamp(1, 100) as usize;
+        let field_filter = field.map(|f| f.trim().to_ascii_lowercase());
+
+        const PAGE_SIZE: u32 = 100;
+        const MAX_PAGES: u32 = 50;
+
+        let mut collected: Vec<Value> = Vec::new();
+        // Raw changelog entries walked, filtered-out ones included, so the resume cursor stays exact.
+        let mut consumed: u32 = 0;
+        let mut pages = 0u32;
+        let mut total: Option<u64> = None;
+        let mut exhausted = false;
+
+        'pages: while collected.len() < max && pages < MAX_PAGES {
+            pages += 1;
+            let url = format!(
+                "{}/issue/{}/changelog?startAt={}&maxResults={}",
+                self.api_root,
+                encode_path_segment(key),
+                start_at.saturating_add(consumed),
+                PAGE_SIZE
+            );
+            let raw: Value = self.get_json(&url).await?;
+
+            if total.is_none() {
+                total = raw.get("total").and_then(|t| t.as_u64());
+            }
+
+            let values = raw
+                .get("values")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let page_len = values.len() as u32;
+
+            if page_len == 0 {
+                exhausted = true;
+                break;
+            }
+
+            for entry in &values {
+                consumed += 1;
+                let Some(obj) = entry.as_object() else {
+                    continue;
+                };
+                let items = obj
+                    .get("items")
+                    .and_then(|i| i.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter(|it| match &field_filter {
+                                None => true,
+                                Some(want) => it
+                                    .get("field")
+                                    .and_then(|f| f.as_str())
+                                    .is_some_and(|f| f.to_ascii_lowercase() == *want),
+                            })
+                            .map(slim_change_item)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                if !items.is_empty() {
+                    collected.push(json!({
+                        "id": obj.get("id").and_then(|x| x.as_str()),
+                        "author": obj.get("author").map(slim_user).unwrap_or(Value::Null),
+                        "created": obj.get("created").and_then(|x| x.as_str()),
+                        "items": items,
+                    }));
+                }
+
+                if collected.len() >= max {
+                    break 'pages;
+                }
+            }
+
+            let is_last = raw
+                .get("isLast")
+                .and_then(|l| l.as_bool())
+                .unwrap_or(page_len < PAGE_SIZE);
+            if is_last {
+                exhausted = true;
+                break;
+            }
+        }
+
+        Ok(json!({
+            "key": key,
+            "field": field_filter,
+            "total_changes": total,
+            "returned": collected.len(),
+            "next_start_at": if exhausted { Value::Null } else { json!(start_at.saturating_add(consumed)) },
+            "history": collected,
+        }))
+    }
+
     /// Set the assignee for a Jira issue. `account_id`:
     /// - `Some("<accountId>")` assigns that user
     /// - `Some("-1")` uses the project's default assignee
@@ -772,6 +881,17 @@ fn slim_user(v: &Value) -> Value {
     })
 }
 
+fn slim_change_item(v: &Value) -> Value {
+    let Some(o) = v.as_object() else {
+        return Value::Null;
+    };
+    json!({
+        "field": o.get("field").and_then(|x| x.as_str()),
+        "from": o.get("fromString").and_then(|x| x.as_str()),
+        "to": o.get("toString").and_then(|x| x.as_str()),
+    })
+}
+
 fn slim_status(v: &Value) -> Value {
     let Some(o) = v.as_object() else {
         return Value::Null;
@@ -968,6 +1088,22 @@ fn plain_text_to_adf(text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slim_change_item_keeps_display_strings() {
+        let item = json!({
+            "field": "status",
+            "fieldtype": "jira",
+            "from": "10000",
+            "fromString": "In Progress",
+            "to": "10001",
+            "toString": "Done"
+        });
+        assert_eq!(
+            slim_change_item(&item),
+            json!({ "field": "status", "from": "In Progress", "to": "Done" })
+        );
+    }
 
     #[test]
     fn encode_path_segment_allows_safe_chars() {
