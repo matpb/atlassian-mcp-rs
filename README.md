@@ -38,7 +38,7 @@ Bitbucket credentials are also taken **only** from HTTP headers (not from the se
 |--------|--------|
 | `X-Bitbucket-Workspace` | Workspace slug (e.g. `acme`) |
 | `X-Bitbucket-Username` | Atlassian account **email** (not the Bitbucket username) |
-| `X-Bitbucket-Api-Token` | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) with Bitbucket read/write repository scopes |
+| `X-Bitbucket-Api-Token` | [API token](https://id.atlassian.com/manage-profile/security/api-tokens) with Bitbucket read/write repository scopes. Add `read:pipeline:bitbucket` for the pipeline tools, `write:pipeline:bitbucket` to trigger/stop runs and `admin:pipeline:bitbucket` to write pipeline variables |
 | `X-Bitbucket-App-Password` | **Legacy alias** for `X-Bitbucket-Api-Token`, still accepted so existing configs keep working. App passwords themselves were retired by Atlassian in July 2026 — the value must be an API token either way. If both headers are sent, `X-Bitbucket-Api-Token` wins |
 
 > **Do not** put `x-bitbucket-api-token-auth` in `X-Bitbucket-Username`. That static username is correct for git-over-HTTPS but the REST API rejects it with `401 API token must be used with an atlassian registered email`. This server only speaks REST, so the username must be your Atlassian account email.
@@ -202,6 +202,18 @@ Most tools accept optional `workspace` (overrides `X-Bitbucket-Workspace`) and, 
 | `bitbucket_approve_pull_request` / `bitbucket_unapprove_pull_request` | Approve or withdraw approval. |
 | `bitbucket_decline_pull_request` | Decline PR; optional `message`. |
 | `bitbucket_merge_pull_request` | Merge; optional `merge_strategy` (`merge_commit`, `squash`, `fast_forward`), `close_source_branch`, `message`. |
+| `bitbucket_list_pipelines` | Pipeline runs, newest first, as a compact summary (build_number, uuid, state, result, ref, commit, trigger, creator, timing, web URL). Optional `target_branch` filters the fetched page; `raw` returns Bitbucket's full objects. |
+| `bitbucket_get_pipeline` | One run by build number or UUID. Finished when `state` is `COMPLETED`; a run with a manual step stays `IN_PROGRESS` / `PAUSED` after its automatic steps, so check steps or deployments when watching a deploy. |
+| `bitbucket_list_pipeline_steps` | Steps of a run: name, state, result, timing, trigger (automatic/manual) and the step `uuid`. |
+| `bitbucket_get_pipeline_step_log` | Console log of one step; returns the last `tail_chars` characters (default 20000) with `total_chars` and `truncated_head`. 404 until the step has started. |
+| `bitbucket_trigger_pipeline` | Start a run on `ref_name` (branch, or tag with `ref_type`); optional `commit_hash`, `custom_pipeline` (a `custom:` pipeline from the YAML) and `variables`. Needs the **`write:pipeline:bitbucket`** token scope. |
+| `bitbucket_stop_pipeline` | Stop a running pipeline. Needs `write:pipeline:bitbucket`. |
+| `bitbucket_list_deployments` | Deployments, newest first: environment, state, status, build_number, commit, timing. `raw` for the full payload. |
+| `bitbucket_list_deployment_environments` | Environments with uuid, name, slug, type and rank. |
+| `bitbucket_list_pipeline_variables` | Repository variables (omit `environment`) or one deployment environment's variables (`environment` = name, slug or UUID). Secured values are never returned. |
+| `bitbucket_create_pipeline_variable` | Create a variable in either scope: `key`, `value`, `secured`. Needs **`admin:pipeline:bitbucket`**. |
+| `bitbucket_update_pipeline_variable` | Update by key name or UUID; omitted fields are carried over. `value` is required for a secured variable. Needs `admin:pipeline:bitbucket`. |
+| `bitbucket_delete_pipeline_variable` | Delete by key name or UUID. Needs `admin:pipeline:bitbucket`. |
 
 ## Other MCP clients (e.g. Cursor)
 

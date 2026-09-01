@@ -7,7 +7,7 @@ use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::bitbucket::BitbucketClient;
+use crate::bitbucket::{BitbucketClient, PipelineVariable};
 use crate::confluence::ConfluenceClient;
 use crate::credentials;
 use crate::jira::{self, JiraClient};
@@ -444,6 +444,166 @@ struct BbMergePrParams {
     close_source_branch: Option<bool>,
     #[serde(default)]
     message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListPipelinesParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Page size (1–100, default 10). Newest first.
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+    /// Keep only pipelines whose target branch/tag equals this name. Filters the fetched page, so raise `pagelen` if the branch is quiet.
+    #[serde(default)]
+    target_branch: Option<String>,
+    /// Return Bitbucket's full pipeline objects instead of the compact summary.
+    #[serde(default)]
+    raw: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbPipelineParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Pipeline build number (e.g. `142`) or UUID including braces (e.g. `{a1b2c3d4-...}`).
+    pipeline: String,
+    /// Return Bitbucket's full object instead of the compact summary.
+    #[serde(default)]
+    raw: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbStopPipelineParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Pipeline build number or UUID including braces.
+    pipeline: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbPipelineStepLogParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Pipeline build number or UUID including braces.
+    pipeline: String,
+    /// Step UUID including braces, from `bitbucket_list_pipeline_steps`.
+    step_uuid: String,
+    /// Keep only the last N characters of the log (default 20000). The response reports the total size and whether the head was cut.
+    #[serde(default)]
+    tail_chars: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbTriggerPipelineParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Branch or tag name to run the pipeline on, e.g. `master`.
+    ref_name: String,
+    /// `branch` (default) or `tag`.
+    #[serde(default)]
+    ref_type: Option<String>,
+    /// Pin the run to a specific commit hash on that ref instead of its current head.
+    #[serde(default)]
+    commit_hash: Option<String>,
+    /// Name of a `custom:` pipeline from bitbucket-pipelines.yml. Omit to run the ref's default pipeline.
+    #[serde(default)]
+    custom_pipeline: Option<String>,
+    /// Variables for the run: `[{"key": "X", "value": "y", "secured": false}]`. Only variables declared on a custom pipeline are honoured.
+    #[serde(default)]
+    variables: Option<Vec<PipelineVariable>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListDeploymentsParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+    /// Return Bitbucket's full deployment objects instead of the compact summary.
+    #[serde(default)]
+    raw: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListEnvironmentsParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Return Bitbucket's full environment objects instead of the compact summary.
+    #[serde(default)]
+    raw: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListVariablesParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Deployment environment name, slug or UUID. Omit for repository-level variables.
+    #[serde(default)]
+    environment: Option<String>,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbCreateVariableParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Deployment environment name, slug or UUID. Omit for a repository-level variable.
+    #[serde(default)]
+    environment: Option<String>,
+    key: String,
+    value: String,
+    /// Secured variables are write-only: Bitbucket never returns the value again.
+    #[serde(default)]
+    secured: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbUpdateVariableParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Deployment environment name, slug or UUID. Omit for a repository-level variable.
+    #[serde(default)]
+    environment: Option<String>,
+    /// Existing variable, by key name or UUID including braces.
+    variable: String,
+    /// New key name. Omit to keep.
+    #[serde(default)]
+    key: Option<String>,
+    /// New value. Required when the variable is secured, since its current value cannot be read back.
+    #[serde(default)]
+    value: Option<String>,
+    /// Change the secured flag. Omit to keep.
+    #[serde(default)]
+    secured: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbDeleteVariableParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Deployment environment name, slug or UUID. Omit for a repository-level variable.
+    #[serde(default)]
+    environment: Option<String>,
+    /// Existing variable, by key name or UUID including braces.
+    variable: String,
 }
 
 #[tool_router]
@@ -1352,6 +1512,305 @@ impl AtlassianMcp {
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
+
+    // --- Pipelines & deployments ---
+
+    #[tool(
+        name = "bitbucket_list_pipelines",
+        description = "List pipeline runs for a repository, newest first (GET .../pipelines?sort=-created_on). Compact per-run summary: build_number, uuid, state (PENDING/IN_PROGRESS/COMPLETED), result (SUCCESSFUL/FAILED/STOPPED/ERROR), target ref, commit, trigger, creator, timing and the web URL. Optional `target_branch` filters the fetched page. Set `raw` for the full Bitbucket payload. Poll `bitbucket_get_pipeline` to watch one run finish."
+    )]
+    async fn bitbucket_list_pipelines(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListPipelinesParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_pipelines(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pagelen,
+                p.page,
+                p.target_branch.as_deref(),
+                p.raw,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pipeline",
+        description = "Get one pipeline run by build number or UUID. A run is finished when `state` is COMPLETED; `result` then says SUCCESSFUL, FAILED, STOPPED or ERROR. While running, `stage` shows RUNNING/PAUSED/HALTED. A pipeline with a manual step (e.g. a production deploy) sits at IN_PROGRESS/PAUSED indefinitely after its automatic steps finish, so when monitoring a deploy check `bitbucket_list_pipeline_steps` or `bitbucket_list_deployments` rather than waiting for COMPLETED."
+    )]
+    async fn bitbucket_get_pipeline(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPipelineParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_pipeline(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.pipeline,
+                p.raw,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_pipeline_steps",
+        description = "List the steps of a pipeline run with per-step state, result, deployment environment, timing and the step UUID needed by `bitbucket_get_pipeline_step_log`."
+    )]
+    async fn bitbucket_list_pipeline_steps(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPipelineParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_pipeline_steps(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.pipeline,
+                p.raw,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_pipeline_step_log",
+        description = "Fetch the console log of one pipeline step (GET .../steps/{step_uuid}/log). Returns the LAST `tail_chars` characters (default 20000) plus `total_chars` and `truncated_head`, so a failed step's error is usually in the first call. Logs of steps still running may be partial or 404 until the step starts."
+    )]
+    async fn bitbucket_get_pipeline_step_log(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbPipelineStepLogParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .get_pipeline_step_log(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.pipeline,
+                &p.step_uuid,
+                p.tail_chars,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_trigger_pipeline",
+        description = "Start a pipeline (POST .../pipelines). `ref_name` is the branch (or tag, with `ref_type` = `tag`); optional `commit_hash` pins the run to a commit on that ref; optional `custom_pipeline` names a `custom:` pipeline from bitbucket-pipelines.yml; optional `variables` are passed to it. Returns the new run's summary (build_number, uuid) for polling with `bitbucket_get_pipeline`. This runs real CI/CD, including deployments, so confirm the ref and pipeline name first."
+    )]
+    async fn bitbucket_trigger_pipeline(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbTriggerPipelineParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .trigger_pipeline(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.ref_name,
+                p.ref_type.as_deref(),
+                p.commit_hash.as_deref(),
+                p.custom_pipeline.as_deref(),
+                p.variables.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_stop_pipeline",
+        description = "Stop a running pipeline (POST .../pipelines/{pipeline}/stopPipeline). Bitbucket rejects the call once the run has completed."
+    )]
+    async fn bitbucket_stop_pipeline(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbStopPipelineParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .stop_pipeline(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.pipeline,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_deployments",
+        description = "List deployments for a repository, newest first: environment, state (COMPLETED/IN_PROGRESS/UNDEPLOYED), status (SUCCESSFUL/FAILED/STOPPED), the pipeline build_number and commit that produced it, and timing. Set `raw` for the full payload."
+    )]
+    async fn bitbucket_list_deployments(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListDeploymentsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_deployments(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pagelen,
+                p.page,
+                p.raw,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_list_deployment_environments",
+        description = "List a repository's deployment environments (uuid, name, slug, type Test/Staging/Production, rank). The `environment` argument of the pipeline-variable tools accepts any of name, slug or uuid."
+    )]
+    async fn bitbucket_list_deployment_environments(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListEnvironmentsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_environments(bb_workspace_override(&p.workspace), &p.repo_slug, p.raw)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    // --- Pipeline variables ---
+
+    #[tool(
+        name = "bitbucket_list_pipeline_variables",
+        description = "List pipeline variables. Omit `environment` for repository-level variables (GET .../pipelines_config/variables); pass an environment name, slug or UUID for that deployment's variables (GET .../deployments_config/environments/{uuid}/variables). Deployment-level values override repository-level ones with the same key. Secured variables come back without a value."
+    )]
+    async fn bitbucket_list_pipeline_variables(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListVariablesParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_variables(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.environment.as_deref(),
+                p.pagelen,
+                p.page,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_create_pipeline_variable",
+        description = "Create a pipeline variable at repository level (omit `environment`) or for one deployment environment (name, slug or UUID). `secured` makes it write-only. Needs an API token with the admin:pipeline:bitbucket scope; a read-only token gets 403 `required privilege scopes`."
+    )]
+    async fn bitbucket_create_pipeline_variable(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbCreateVariableParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .create_variable(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.environment.as_deref(),
+                &p.key,
+                &p.value,
+                p.secured,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_update_pipeline_variable",
+        description = "Update an existing pipeline variable, addressed by key name or UUID, at repository level (omit `environment`) or in one deployment environment. Read-modify-write: fields you omit are carried over from the current variable. A secured variable's value cannot be read back, so `value` is required to update one. Needs the admin:pipeline:bitbucket scope."
+    )]
+    async fn bitbucket_update_pipeline_variable(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbUpdateVariableParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .update_variable(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.environment.as_deref(),
+                &p.variable,
+                p.key.as_deref(),
+                p.value.as_deref(),
+                p.secured,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_delete_pipeline_variable",
+        description = "Delete a pipeline variable, addressed by key name or UUID, at repository level (omit `environment`) or in one deployment environment. Irreversible; a secured value cannot be recovered afterwards. Needs the admin:pipeline:bitbucket scope."
+    )]
+    async fn bitbucket_delete_pipeline_variable(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbDeleteVariableParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .delete_variable(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.environment.as_deref(),
+                &p.variable,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
 }
 
 #[tool_handler]
@@ -1360,7 +1819,7 @@ impl ServerHandler for AtlassianMcp {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email -- NOT the Bitbucket username and NOT x-bitbucket-api-token-auth, which the REST API rejects), X-Bitbucket-Api-Token (an Atlassian API token with Bitbucket repository scopes; the legacy name X-Bitbucket-App-Password is still accepted) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace."
+            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email -- NOT the Bitbucket username and NOT x-bitbucket-api-token-auth, which the REST API rejects), X-Bitbucket-Api-Token (an Atlassian API token with Bitbucket repository scopes; the legacy name X-Bitbucket-App-Password is still accepted) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace. Pipelines: bitbucket_list_pipelines / get_pipeline / list_pipeline_steps / get_pipeline_step_log / list_deployments read runs; trigger_pipeline and stop_pipeline need the write:pipeline:bitbucket token scope; the *_pipeline_variable tools (repository or per-deployment-environment) need admin:pipeline:bitbucket to write."
                 .to_string(),
         );
         info
