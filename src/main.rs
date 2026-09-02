@@ -4,10 +4,12 @@ mod confluence;
 mod credentials;
 mod jira;
 mod mcp;
+mod upload;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rmcp::transport::streamable_http_server::{
@@ -21,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 use config::ServerConfig;
 use jira::JiraClient;
 use mcp::tools::AtlassianMcp;
+use upload::{UploadState, UploadTickets};
 
 #[tokio::main]
 async fn main() {
@@ -37,8 +40,22 @@ async fn main() {
     let http = JiraClient::build_http_client().expect("build HTTP client");
     let http = Arc::new(http);
 
+    let tickets = UploadTickets::default();
+    let upload_state = UploadState {
+        http: (*http).clone(),
+        tickets: tickets.clone(),
+        max_bytes: cfg.max_upload_bytes,
+    };
+    let public_url = cfg.public_url.clone();
+
     let mcp_service = StreamableHttpService::new(
-        move || Ok(AtlassianMcp::new((*http).clone())),
+        move || {
+            Ok(AtlassianMcp::new(
+                (*http).clone(),
+                tickets.clone(),
+                public_url.clone(),
+            ))
+        },
         Arc::new(NeverSessionManager::default()),
         StreamableHttpServerConfig {
             stateful_mode: false,
@@ -50,6 +67,13 @@ async fn main() {
     let app = axum::Router::new()
         .route("/health", axum::routing::get(health))
         .route("/mcp", axum::routing::any_service(mcp_service))
+        .route(
+            "/upload/{token}",
+            axum::routing::put(upload::handle_upload)
+                .post(upload::handle_upload)
+                .layer(DefaultBodyLimit::disable())
+                .with_state(upload_state),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 

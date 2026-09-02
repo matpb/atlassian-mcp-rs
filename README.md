@@ -59,6 +59,8 @@ You can send **both** Atlassian (Jira/Confluence) and Bitbucket headers on every
 |----------|---------|-------------|
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `8432` | HTTP port |
+| `MCP_PUBLIC_URL` | derived from `X-Forwarded-Proto`/`X-Forwarded-Host`/`Host` | Origin agents reach the server at; used to build `jira_get_attachment_upload_url` links. Set it behind a proxy that does not forward those headers. |
+| `MCP_MAX_UPLOAD_BYTES` | `104857600` | Body limit for `PUT /upload/{token}`. |
 
 Optional: `RUST_LOG` for tracing.
 
@@ -168,7 +170,8 @@ To **read** rich content without losing structure, call **`jira_get_issue`** wit
 | `jira_search` | **JQL** via `POST /rest/api/3/search/jql` (not legacy `/search`). `max_results` (1–100, default 25), `start_at`; response includes `nextPageToken` / `isLast` for pagination. |
 | `jira_search_users` | Search users by name or email. Returns `accountId` (needed for ADF `@`-mentions and `jira_set_assignee`), `displayName`, `emailAddress`, `active`. |
 | `jira_list_attachments` | List attachments on an issue: id, filename, `mimeType`, size, download URL, created date, author. |
-| `jira_add_attachment` | Upload a file to an issue. **`filename`** + **`file_base64`** (base64-encoded content). Returns attachment metadata. |
+| `jira_add_attachment` | Upload a small file to an issue. **`filename`** + **`file_base64`** (base64-encoded content). Returns attachment metadata. |
+| `jira_get_attachment_upload_url` | Upload a **local file without base64**: returns a one-shot, short-lived `upload_url` (+ ready `curl` line). `PUT` the raw bytes to it; the server forwards them to Jira with the credentials of the tool call and stores nothing. **`issue_key`**, **`filename`**, optional `ttl_seconds` (default 600, max 3600). |
 | `jira_delete_attachment` | Delete an attachment by **`attachment_id`** (from `jira_list_attachments` or `jira_get_issue`). |
 | `confluence_search` | **CQL** search; `limit` (1–100, default 25). |
 | `confluence_create_page` | Create a page via the **v2 API** (`POST /wiki/api/v2/pages`): **`space_id`** (numeric id or space key, e.g. `SIKU`), **`title`**, **`body`**, optional **`body_format`** `storage` (Confluence XHTML, default) or `wiki`, **`parent_id`** (omit for top-level), **`status`** `current` (default) or `draft`. Returns id, title, status and the webui link. |

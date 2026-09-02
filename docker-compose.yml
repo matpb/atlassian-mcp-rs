@@ -10,3 +10,5 @@ services:
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8432"
       RUST_LOG: "${RUST_LOG:-atlassian_mcp=info}"
+      MCP_PUBLIC_URL: "${MCP_PUBLIC_URL:-}"
+      MCP_MAX_UPLOAD_BYTES: "${MCP_MAX_UPLOAD_BYTES:-104857600}"

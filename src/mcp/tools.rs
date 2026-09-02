@@ -11,17 +11,25 @@ use crate::bitbucket::{BitbucketClient, PipelineVariable};
 use crate::confluence::ConfluenceClient;
 use crate::credentials;
 use crate::jira::{self, JiraClient};
+use crate::upload::{self, UploadTickets};
 
 #[derive(Clone)]
 pub struct AtlassianMcp {
     http: Client,
+    tickets: UploadTickets,
+    public_url: Option<String>,
     tool_router: rmcp::handler::server::tool::ToolRouter<Self>,
 }
 
 impl AtlassianMcp {
-    pub fn new(http: Client) -> Self {
+    pub fn new(http: Client, tickets: UploadTickets, public_url: Option<String>) -> Self {
         let tool_router = Self::tool_router();
-        Self { http, tool_router }
+        Self {
+            http,
+            tickets,
+            public_url,
+            tool_router,
+        }
     }
 
     fn resolve(parts: &Parts) -> Result<crate::credentials::AtlassianCredentials, ErrorData> {
@@ -151,6 +159,16 @@ struct AddAttachmentParams {
     filename: String,
     /// File content as a **base64-encoded** string
     file_base64: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct GetAttachmentUploadUrlParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// File name including extension, e.g. `report.zip`
+    filename: String,
+    /// Seconds the upload URL stays valid. Default 600, max 3600.
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -842,7 +860,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_add_attachment",
-        description = "Upload a file attachment to a Jira issue. The file content must be provided as a base64-encoded string. Returns the created attachment metadata."
+        description = "Upload a small file attachment to a Jira issue, content as a base64-encoded string. For anything beyond a few hundred KB use jira_get_attachment_upload_url and send the raw bytes with curl instead. Returns the created attachment metadata."
     )]
     async fn jira_add_attachment(
         &self,
@@ -863,6 +881,54 @@ impl AtlassianMcp {
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_get_attachment_upload_url",
+        description = "Get a one-shot, short-lived URL to upload a LOCAL file as a Jira attachment without base64. Then run the returned `curl` command (raw bytes, PUT, no auth headers needed): the server forwards the bytes straight to Jira using the credentials of this call and stores nothing. Each URL works exactly once. Returns `upload_url`, `curl`, `expires_in_seconds`."
+    )]
+    async fn jira_get_attachment_upload_url(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<GetAttachmentUploadUrlParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let issue_key = p.issue_key.trim().to_string();
+        let filename = p.filename.trim().to_string();
+        if issue_key.is_empty() || filename.is_empty() {
+            return Err(ErrorData::invalid_request(
+                "issue_key and filename must not be empty",
+                None,
+            ));
+        }
+        let origin =
+            upload::public_origin(self.public_url.as_deref(), &parts.headers).ok_or_else(|| {
+                ErrorData::internal_error(
+                    "Cannot determine the public URL of this server; set MCP_PUBLIC_URL",
+                    None,
+                )
+            })?;
+        let ttl = std::time::Duration::from_secs(
+            p.ttl_seconds
+                .unwrap_or(upload::DEFAULT_TTL.as_secs())
+                .clamp(1, upload::MAX_TTL.as_secs()),
+        );
+        let token = self
+            .tickets
+            .issue(creds, issue_key.clone(), filename.clone(), ttl);
+        let upload_url = format!("{origin}{}", upload::upload_path(&token));
+
+        let value = serde_json::json!({
+            "issue_key": issue_key,
+            "filename": filename,
+            "upload_url": upload_url,
+            "method": "PUT",
+            "expires_in_seconds": ttl.as_secs(),
+            "single_use": true,
+            "curl": format!("curl -sS -X PUT --data-binary @'{filename}' '{upload_url}'"),
+        });
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
