@@ -6,6 +6,7 @@ use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::bitbucket::{BitbucketClient, PipelineVariable};
 use crate::confluence::ConfluenceClient;
@@ -219,6 +220,48 @@ struct SetAssigneeParams {
     /// Omit or pass `null` to unassign the issue.
     #[serde(default)]
     account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ListBoardsParams {
+    /// Restrict to boards for this project key, e.g. `PROJ`. Omit for all boards.
+    #[serde(default)]
+    project_key: Option<String>,
+    /// Maximum boards to return (1-50, default 50)
+    #[serde(default)]
+    max_results: Option<u32>,
+    /// Pagination offset (default 0)
+    #[serde(default)]
+    start_at: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BoardIssuesParams {
+    /// Jira Agile board ID, from `jira_list_boards`
+    board_id: u64,
+    /// `"board"` (on the board, default), `"backlog"` (backlog only), or `"all"` (board + backlog combined)
+    #[serde(default)]
+    scope: Option<String>,
+    /// Include issues whose status category is Done (default false)
+    #[serde(default)]
+    include_done: Option<bool>,
+    /// Extra JQL filter, ANDed with the done-status filter
+    #[serde(default)]
+    jql: Option<String>,
+    /// Maximum issues to return (1-100, default 100)
+    #[serde(default)]
+    max_results: Option<u32>,
+    /// Pagination offset into the final result list (default 0)
+    #[serde(default)]
+    start_at: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MoveBoardIssuesParams {
+    /// Jira Agile board ID
+    board_id: u64,
+    /// Issue keys to move, e.g. `["PROJ-1","PROJ-2"]`. 1-50 keys per call (Jira's cap).
+    issue_keys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -795,6 +838,184 @@ impl AtlassianMcp {
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
         serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_list_boards",
+        description = "List Jira Agile boards (GET /rest/agile/1.0/board), optionally filtered to one project. Use the returned board `id` with jira_board_issues, jira_move_to_board and jira_move_to_backlog."
+    )]
+    async fn jira_list_boards(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<ListBoardsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let max = p.max_results.unwrap_or(50).clamp(1, 50);
+        let raw = jira
+            .list_boards(p.project_key.as_deref(), max, p.start_at.unwrap_or(0))
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        let boards: Vec<Value> = raw
+            .get("values")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|b| {
+                        serde_json::json!({
+                            "id": b.get("id"),
+                            "name": b.get("name"),
+                            "type": b.get("type"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let out = serde_json::json!({
+            "boards": boards,
+            "isLast": raw.get("isLast"),
+            "total": raw.get("total"),
+        });
+        serde_json::to_string_pretty(&out)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_board_issues",
+        description = "List a Jira Agile board's issues, split by scope: \"board\" (default, issues on the board's columns), \"backlog\" (issues in the board's backlog), or \"all\" (board + backlog combined). On a team-managed board, backlog membership has NO JQL equivalent -- `/board/{id}/issue` returns backlog issues too, so scope=\"board\" is computed as the set difference of that endpoint's keys minus `/board/{id}/backlog`'s keys. include_done=false (default) adds `statusCategory != Done` to the JQL. start_at/max_results paginate the FINAL list, after scope filtering."
+    )]
+    async fn jira_board_issues(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BoardIssuesParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+
+        let scope = p.scope.as_deref().unwrap_or("board");
+        if !matches!(scope, "board" | "backlog" | "all") {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "Invalid scope '{scope}'. Must be one of: \"board\", \"backlog\", \"all\"."
+                ),
+                None,
+            ));
+        }
+
+        let include_done = p.include_done.unwrap_or(false);
+        let effective_jql = build_effective_jql(p.jql.as_deref(), include_done);
+
+        let (raw_issues, truncated): (Vec<Value>, bool) = if scope == "backlog" {
+            jira.paginate_board_endpoint(p.board_id, "backlog", effective_jql.as_deref())
+                .await
+                .map_err(|e| ErrorData::internal_error(e, None))?
+        } else if scope == "all" {
+            jira.paginate_board_endpoint(p.board_id, "issue", effective_jql.as_deref())
+                .await
+                .map_err(|e| ErrorData::internal_error(e, None))?
+        } else {
+            let (board_raw, board_truncated) = jira
+                .paginate_board_endpoint(p.board_id, "issue", effective_jql.as_deref())
+                .await
+                .map_err(|e| ErrorData::internal_error(e, None))?;
+            let (backlog_raw, backlog_truncated) = jira
+                .paginate_board_endpoint(p.board_id, "backlog", effective_jql.as_deref())
+                .await
+                .map_err(|e| ErrorData::internal_error(e, None))?;
+            if board_truncated || backlog_truncated {
+                return Err(ErrorData::internal_error(
+                    format!(
+                        "board {} scope=\"board\" set difference is unreliable: board or backlog fetch was truncated by the MAX_PAGES cap",
+                        p.board_id
+                    ),
+                    None,
+                ));
+            }
+            let board_keys = extract_keys(&board_raw);
+            let backlog_keys = extract_keys(&backlog_raw);
+            let on_board = on_board_key_set(&board_keys, &backlog_keys);
+            let filtered = board_raw
+                .into_iter()
+                .filter(|v| {
+                    v.get("key")
+                        .and_then(|k| k.as_str())
+                        .is_some_and(|k| on_board.contains(k))
+                })
+                .collect();
+            (filtered, false)
+        };
+
+        let total = raw_issues.len();
+        let start_at = p.start_at.unwrap_or(0) as usize;
+        let max = p.max_results.unwrap_or(100).clamp(1, 100) as usize;
+        let page: Vec<Value> = raw_issues
+            .into_iter()
+            .skip(start_at)
+            .take(max)
+            .filter_map(|v| v.as_object().map(jira::slim_search_issue))
+            .collect();
+
+        let out = serde_json::json!({
+            "scope": scope,
+            "board_id": p.board_id,
+            "total": total,
+            "issues": page,
+            "truncated": truncated,
+        });
+        serde_json::to_string_pretty(&out)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_move_to_board",
+        description = "Move issues from a board's backlog onto the board (POST /rest/agile/1.0/board/{id}/issue). Does NOT change issue status -- only backlog/board membership. Up to 50 issue keys per call (Jira's cap)."
+    )]
+    async fn jira_move_to_board(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<MoveBoardIssuesParams>,
+    ) -> Result<String, ErrorData> {
+        validate_issue_keys(&p.issue_keys)?;
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        jira.move_issues_to_board(p.board_id, &p.issue_keys)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        let out = serde_json::json!({
+            "moved_to": "board",
+            "board_id": p.board_id,
+            "issue_keys": p.issue_keys,
+        });
+        serde_json::to_string_pretty(&out)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_move_to_backlog",
+        description = "Move issues from a board onto its backlog (POST /rest/agile/1.0/backlog/{id}/issue, the board-scoped form -- the boardless /backlog/issue endpoint is scrum-only). Does NOT change issue status -- only backlog/board membership. Up to 50 issue keys per call (Jira's cap)."
+    )]
+    async fn jira_move_to_backlog(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<MoveBoardIssuesParams>,
+    ) -> Result<String, ErrorData> {
+        validate_issue_keys(&p.issue_keys)?;
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        jira.move_issues_to_backlog(p.board_id, &p.issue_keys)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        let out = serde_json::json!({
+            "moved_to": "backlog",
+            "board_id": p.board_id,
+            "issue_keys": p.issue_keys,
+        });
+        serde_json::to_string_pretty(&out)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 
@@ -1889,5 +2110,158 @@ impl ServerHandler for AtlassianMcp {
                 .to_string(),
         );
         info
+    }
+}
+
+/// Splits trailing `ORDER BY ...` (case-insensitive, last occurrence) off a JQL string.
+fn split_order_by(jql: &str) -> (&str, Option<&str>) {
+    let lower = jql.to_ascii_lowercase();
+    match lower.rfind("order by") {
+        Some(idx) => (jql[..idx].trim_end(), Some(jql[idx..].trim())),
+        None => (jql.trim_end(), None),
+    }
+}
+
+/// Builds the effective JQL for jira_board_issues: ANDs the done-status filter onto the
+/// caller's where-clause, preserving any trailing ORDER BY tail at the end.
+fn build_effective_jql(caller_jql: Option<&str>, include_done: bool) -> Option<String> {
+    let Some(j) = caller_jql else {
+        return if include_done {
+            None
+        } else {
+            Some("statusCategory != Done".to_string())
+        };
+    };
+    if include_done {
+        return Some(j.to_string());
+    }
+    let (where_clause, order_tail) = split_order_by(j);
+    let base = if where_clause.is_empty() {
+        "statusCategory != Done".to_string()
+    } else {
+        format!("({where_clause}) AND statusCategory != Done")
+    };
+    match order_tail {
+        Some(tail) => Some(format!("{base} {tail}")),
+        None => Some(base),
+    }
+}
+
+fn extract_keys(issues: &[Value]) -> Vec<String> {
+    issues
+        .iter()
+        .filter_map(|v| v.get("key").and_then(|k| k.as_str()).map(str::to_string))
+        .collect()
+}
+
+/// Pure set difference: board keys not present in the backlog set.
+fn on_board_key_set(
+    board_keys: &[String],
+    backlog_keys: &[String],
+) -> std::collections::HashSet<String> {
+    let backlog: std::collections::HashSet<&str> =
+        backlog_keys.iter().map(String::as_str).collect();
+    board_keys
+        .iter()
+        .filter(|k| !backlog.contains(k.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn validate_issue_keys(keys: &[String]) -> Result<(), ErrorData> {
+    if keys.is_empty() {
+        return Err(ErrorData::invalid_params(
+            "issue_keys must not be empty".to_string(),
+            None,
+        ));
+    }
+    if keys.len() > 50 {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "issue_keys has {} entries; Jira caps this endpoint at 50 per call",
+                keys.len()
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_board_key_set_excludes_backlog_members() {
+        let board = vec!["A-1".to_string(), "A-2".to_string(), "A-3".to_string()];
+        let backlog = vec!["A-2".to_string(), "A-3".to_string()];
+        let on_board = on_board_key_set(&board, &backlog);
+        assert_eq!(
+            on_board,
+            std::collections::HashSet::from(["A-1".to_string()])
+        );
+    }
+
+    #[test]
+    fn on_board_key_set_with_empty_backlog_keeps_everything() {
+        let board = vec!["A-1".to_string(), "A-2".to_string()];
+        let backlog: Vec<String> = vec![];
+        let on_board = on_board_key_set(&board, &backlog);
+        assert_eq!(
+            on_board,
+            std::collections::HashSet::from(["A-1".to_string(), "A-2".to_string()])
+        );
+    }
+
+    #[test]
+    fn effective_jql_no_order_by() {
+        let out = build_effective_jql(Some("project = SWS"), false);
+        assert_eq!(
+            out.as_deref(),
+            Some("(project = SWS) AND statusCategory != Done")
+        );
+    }
+
+    #[test]
+    fn effective_jql_lowercase_order_by() {
+        let out = build_effective_jql(
+            Some("assignee = currentUser() order by updated DESC"),
+            false,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("(assignee = currentUser()) AND statusCategory != Done order by updated DESC")
+        );
+    }
+
+    #[test]
+    fn effective_jql_trailing_order_by() {
+        let out = build_effective_jql(
+            Some("assignee = currentUser() ORDER BY updated DESC"),
+            false,
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("(assignee = currentUser()) AND statusCategory != Done ORDER BY updated DESC")
+        );
+    }
+
+    #[test]
+    fn effective_jql_include_done_leaves_caller_jql_untouched() {
+        let out = build_effective_jql(Some("assignee = currentUser() ORDER BY updated DESC"), true);
+        assert_eq!(
+            out.as_deref(),
+            Some("assignee = currentUser() ORDER BY updated DESC")
+        );
+    }
+
+    #[test]
+    fn effective_jql_done_filter_lands_before_order_by_tail() {
+        let out = build_effective_jql(Some("project = SWS ORDER BY updated DESC"), false).unwrap();
+        let done_idx = out
+            .find("statusCategory != Done")
+            .expect("done filter present");
+        let order_idx = out.find("ORDER BY").expect("order by present");
+        assert!(done_idx < order_idx);
     }
 }

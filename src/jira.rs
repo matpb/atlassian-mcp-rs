@@ -13,6 +13,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 pub struct JiraClient {
     http: Client,
     api_root: String,
+    agile_root: String,
     email: String,
     token: String,
 }
@@ -22,6 +23,7 @@ impl JiraClient {
         Self {
             http,
             api_root: creds.jira_rest_v3_root(),
+            agile_root: creds.agile_root(),
             email: creds.email.clone(),
             token: creds.api_token.clone(),
         }
@@ -326,6 +328,101 @@ impl JiraClient {
             "isLast": is_last_out,
             "nextPageToken": next_out,
         }))
+    }
+
+    /// List Jira Agile boards, optionally filtered to one project. GET /rest/agile/1.0/board.
+    pub async fn list_boards(
+        &self,
+        project_key: Option<&str>,
+        max_results: u32,
+        start_at: u32,
+    ) -> Result<Value, String> {
+        let max = max_results.clamp(1, 50);
+        let mut url = format!(
+            "{}/board?maxResults={}&startAt={}",
+            self.agile_root, max, start_at
+        );
+        if let Some(pk) = project_key {
+            let pk = pk.trim();
+            if !pk.is_empty() {
+                url.push_str(&format!("&projectKeyOrId={}", encode_path_segment(pk)));
+            }
+        }
+        self.get_json(&url).await
+    }
+
+    /// `/board/{id}/issue` also includes backlog issues (Jira API quirk).
+    /// Returns (issues, truncated) -- truncated means MAX_PAGES cut it off before `total`.
+    pub async fn paginate_board_endpoint(
+        &self,
+        board_id: u64,
+        endpoint: &str,
+        jql: Option<&str>,
+    ) -> Result<(Vec<Value>, bool), String> {
+        const PAGE_SIZE: u32 = 100;
+        const MAX_PAGES: u32 = 50;
+
+        let mut collected: Vec<Value> = Vec::new();
+        let mut start_at: u32 = 0;
+        let mut total: Option<u64> = None;
+
+        for _ in 0..MAX_PAGES {
+            let mut url = format!(
+                "{}/board/{}/{}?maxResults={}&startAt={}&fields=key,summary,status,issuetype,assignee,updated",
+                self.agile_root, board_id, endpoint, PAGE_SIZE, start_at
+            );
+            if let Some(j) = jql {
+                url.push_str(&format!("&jql={}", encode_path_segment(j)));
+            }
+
+            let raw: Value = self.get_json(&url).await?;
+            if total.is_none() {
+                total = raw.get("total").and_then(|t| t.as_u64());
+            }
+            let issues = raw
+                .get("issues")
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let page_len = issues.len() as u32;
+            collected.extend(issues);
+
+            if page_len == 0 {
+                break;
+            }
+            start_at += page_len;
+
+            if total.is_some_and(|t| collected.len() as u64 >= t) {
+                break;
+            }
+        }
+
+        let truncated = total.is_some_and(|t| (collected.len() as u64) < t);
+
+        Ok((collected, truncated))
+    }
+
+    /// Move issues from the backlog onto a board. POST /rest/agile/1.0/board/{id}/issue. 204 on success.
+    pub async fn move_issues_to_board(
+        &self,
+        board_id: u64,
+        issue_keys: &[String],
+    ) -> Result<Value, String> {
+        let url = format!("{}/board/{}/issue", self.agile_root, board_id);
+        let payload = json!({ "issues": issue_keys });
+        self.post_json_no_content(&url, &payload).await
+    }
+
+    /// Move issues from a board into its backlog. Board-scoped POST only; the boardless
+    /// `/backlog/issue` endpoint is scrum-only.
+    pub async fn move_issues_to_backlog(
+        &self,
+        board_id: u64,
+        issue_keys: &[String],
+    ) -> Result<Value, String> {
+        let url = format!("{}/backlog/{}/issue", self.agile_root, board_id);
+        let payload = json!({ "issues": issue_keys });
+        self.post_json_no_content(&url, &payload).await
     }
 
     /// Search for Jira users by name or email. Returns accountId (needed for ADF mentions), displayName, emailAddress, and active status.
@@ -832,7 +929,7 @@ impl JiraClient {
     }
 }
 
-fn slim_search_issue(issue: &serde_json::Map<String, Value>) -> Value {
+pub(crate) fn slim_search_issue(issue: &serde_json::Map<String, Value>) -> Value {
     let fields = issue.get("fields").and_then(|f| f.as_object());
     json!({
         "key": issue.get("key").and_then(|k| k.as_str()),

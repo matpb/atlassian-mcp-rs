@@ -31,6 +31,10 @@ impl AtlassianCredentials {
         format!("{}/rest/api/3", self.site_url)
     }
 
+    pub fn agile_root(&self) -> String {
+        format!("{}/rest/agile/1.0", self.site_url.trim_end_matches('/'))
+    }
+
     pub fn confluence_rest_root(&self) -> String {
         format!("{}/wiki/rest/api", self.confluence_site_url)
     }
@@ -250,6 +254,28 @@ mod tests {
             c.confluence_rest_root(),
             "https://wiki-other.atlassian.net/wiki/rest/api"
         );
+    }
+
+    #[test]
+    fn agile_root_builds_from_site_url() {
+        let c = AtlassianCredentials::new(
+            "https://x.atlassian.net".into(),
+            "mcp-test-noreply@example.invalid".into(),
+            "stub_atlassian_api_header_001".into(),
+            "https://x.atlassian.net".into(),
+        );
+        assert_eq!(c.agile_root(), "https://x.atlassian.net/rest/agile/1.0");
+    }
+
+    #[test]
+    fn agile_root_trims_trailing_slash_on_site_url() {
+        let c = AtlassianCredentials {
+            site_url: "https://x.atlassian.net/".into(),
+            confluence_site_url: "https://x.atlassian.net".into(),
+            email: "mcp-test-noreply@example.invalid".into(),
+            api_token: "stub_atlassian_api_header_001".into(),
+        };
+        assert_eq!(c.agile_root(), "https://x.atlassian.net/rest/agile/1.0");
     }
 
     #[test]
