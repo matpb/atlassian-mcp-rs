@@ -188,6 +188,19 @@ impl JiraClient {
         self.put_json(&url, &payload).await
     }
 
+    /// Replace the issue summary (`PUT /rest/api/3/issue/{key}`).
+    pub async fn update_summary(&self, issue_key: &str, summary: &str) -> Result<Value, String> {
+        let key = issue_key.trim();
+        if key.is_empty() {
+            return Err("issue_key must not be empty".into());
+        }
+
+        let url = format!("{}/issue/{}", self.api_root, encode_path_segment(key));
+        let payload = summary_payload(summary)?;
+
+        self.put_json(&url, &payload).await
+    }
+
     /// Create a Jira issue (`POST /rest/api/3/issue`). Description is omitted when `None`.
     pub async fn create_issue(
         &self,
@@ -1150,6 +1163,14 @@ pub fn document_from_content_format(content_format: &str, text: &str) -> Result<
     }
 }
 
+fn summary_payload(summary: &str) -> Result<Value, String> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        return Err("summary must not be empty".into());
+    }
+    Ok(json!({ "fields": { "summary": trimmed } }))
+}
+
 fn plain_text_to_adf(text: &str) -> Value {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut paragraphs: Vec<Value> = Vec::new();
@@ -1200,6 +1221,20 @@ mod tests {
             slim_change_item(&item),
             json!({ "field": "status", "from": "In Progress", "to": "Done" })
         );
+    }
+
+    #[test]
+    fn summary_payload_wraps_trimmed_summary_in_fields() {
+        assert_eq!(
+            summary_payload("  New title  ").unwrap(),
+            json!({"fields":{"summary":"New title"}})
+        );
+    }
+
+    #[test]
+    fn summary_payload_rejects_blank() {
+        let err = summary_payload("   ").unwrap_err();
+        assert!(err.contains("summary"));
     }
 
     #[test]

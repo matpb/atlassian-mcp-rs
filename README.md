@@ -162,6 +162,7 @@ To **read** rich content without losing structure, call **`jira_get_issue`** wit
 | `jira_get_issue` | Compact issue: `key`, `summary`, plain-text `description`, `status`, `attachments`, all comments. Optional **`include_adf`** adds `description_adf` and per-comment **`body_adf`** (raw ADF) for lossless editing. |
 | `jira_add_comment` | Add a comment. **`content_format`**: `plain` (default) or **`adf`** (JSON string of full ADF document). |
 | `jira_update_description` | Replace description; same **`content_format`** as `jira_add_comment`. |
+| `jira_update_summary` | Replace an issue's summary (title) via `PUT /rest/api/3/issue/{key}`. Plain text, trimmed. |
 | `jira_create_issue` | Create an issue: **`project_key`**, **`issue_type`** (name, e.g. `Task`), **`summary`**, optional **`description`** with **`description_content_format`** `plain` or `adf`. |
 | `jira_set_assignee` | Assign an issue via `PUT /rest/api/3/issue/{key}/assignee`. Pass **`account_id`** from `jira_search_users`; `"-1"` uses the project default; omit or pass `null` to unassign. |
 | `jira_get_transitions` | List available workflow transitions for an issue — returns each transition's `id`, `name`, and target status. Feed the id into `jira_transition_issue`. |

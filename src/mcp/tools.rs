@@ -102,6 +102,14 @@ struct UpdateDescriptionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct UpdateSummaryParams {
+    /// Jira issue key, e.g. `PROJ-123`
+    issue_key: String,
+    /// New summary (title), plain text on one line
+    summary: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct CreateIssueParams {
     /// Project key, e.g. `PROJ`
     project_key: String,
@@ -726,6 +734,26 @@ impl AtlassianMcp {
             .map_err(|e| ErrorData::invalid_params(e, None))?;
         let value = jira
             .update_description_with_adf(&p.issue_key, doc)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "jira_update_summary",
+        description = "Replace a Jira issue's summary (title) via PUT /rest/api/3/issue/{key}. Plain text, one line; surrounding whitespace is trimmed."
+    )]
+    async fn jira_update_summary(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<UpdateSummaryParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let jira = JiraClient::new(self.http.clone(), &creds);
+        let value = jira
+            .update_summary(&p.issue_key, &p.summary)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
