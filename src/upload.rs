@@ -156,17 +156,17 @@ mod tests {
     #[test]
     fn ticket_is_one_shot() {
         let store = UploadTickets::default();
-        let token = store.issue(creds(), "SWS-1".into(), "a.zip".into(), DEFAULT_TTL);
+        let token = store.issue(creds(), "PROJ-1".into(), "a.zip".into(), DEFAULT_TTL);
         assert_eq!(token.len(), 43);
         let t = store.take(&token).expect("first take succeeds");
-        assert_eq!(t.issue_key, "SWS-1");
+        assert_eq!(t.issue_key, "PROJ-1");
         assert!(store.take(&token).is_none());
     }
 
     #[test]
     fn expired_ticket_is_gone() {
         let store = UploadTickets::default();
-        let token = store.issue(creds(), "SWS-1".into(), "a.zip".into(), Duration::ZERO);
+        let token = store.issue(creds(), "PROJ-1".into(), "a.zip".into(), Duration::ZERO);
         assert!(store.take(&token).is_none());
     }
 

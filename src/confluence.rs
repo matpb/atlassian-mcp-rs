@@ -84,7 +84,7 @@ impl ConfluenceClient {
         Ok(slim_page(&raw))
     }
 
-    /// Resolve a space key (e.g. "SIKU") to its numeric v2 space ID.
+    /// Resolve a space key (e.g. "DOCS") to its numeric v2 space ID.
     /// If the input is already numeric, returns it as-is.
     async fn resolve_space_id(&self, space_id_or_key: &str) -> Result<String, String> {
         // If it's already numeric, return as-is
@@ -198,7 +198,7 @@ impl ConfluenceClient {
 
     /// Return the wiki base URL (without /rest/api or /api/v2 suffix).
     fn wiki_base_url(&self) -> &str {
-        // wiki_api_root ends with `/wiki/rest/api` — strip `/rest/api` to get the wiki root
+        // wiki_api_root ends with `/wiki/rest/api`; strip `/rest/api` to get the wiki root
         self.wiki_api_root
             .strip_suffix("/rest/api")
             .unwrap_or(&self.wiki_api_root)

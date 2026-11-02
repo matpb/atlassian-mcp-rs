@@ -109,6 +109,40 @@ impl BitbucketClient {
         self.send_json_request(req).await
     }
 
+    // --- Tags ---
+
+    pub async fn list_tags(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        pagelen: Option<u32>,
+        page: Option<u32>,
+        sort: Option<&str>,
+        q: Option<&str>,
+    ) -> Result<Value, String> {
+        let req = self.list_tags_request(workspace_override, repo_slug, pagelen, page, sort, q)?;
+        self.send_json_request(req).await
+    }
+
+    fn list_tags_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        pagelen: Option<u32>,
+        page: Option<u32>,
+        sort: Option<&str>,
+        q: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, String> {
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let req = Self::paged(
+            self.authed(self.http.get(format!("{base}/refs/tags"))),
+            pagelen,
+            page,
+        );
+        let req = query_nonblank(req, "sort", sort);
+        Ok(query_nonblank(req, "q", q))
+    }
+
     // --- Pull requests ---
 
     pub async fn list_pull_requests(
@@ -118,7 +152,28 @@ impl BitbucketClient {
         state: Option<&str>,
         pagelen: Option<u32>,
         page: Option<u32>,
+        sort: Option<&str>,
     ) -> Result<Value, String> {
+        let req = self.list_pull_requests_request(
+            workspace_override,
+            repo_slug,
+            state,
+            pagelen,
+            page,
+            sort,
+        )?;
+        self.send_json_request(req).await
+    }
+
+    fn list_pull_requests_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        state: Option<&str>,
+        pagelen: Option<u32>,
+        page: Option<u32>,
+        sort: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, String> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests");
         let mut req = self
@@ -135,7 +190,7 @@ impl BitbucketClient {
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
         }
-        self.send_json_request(req).await
+        Ok(query_nonblank(req, "sort", sort))
     }
 
     pub async fn get_pull_request(
@@ -487,34 +542,143 @@ impl BitbucketClient {
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Bitbucket: {e}"))
     }
 
+    // --- Files ---
+
+    pub async fn get_file(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        commit: &str,
+        path: &str,
+    ) -> Result<String, String> {
+        let response = self
+            .get_file_request(workspace_override, repo_slug, commit, path)?
+            .send()
+            .await
+            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+
+        if !status.is_success() {
+            return Err(format!("Bitbucket returned {status}: {text}"));
+        }
+        Ok(text)
+    }
+
+    fn get_file_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        commit: &str,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, String> {
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let url = format!(
+            "{base}/src/{}/{}",
+            commit_path_segment(commit)?,
+            encode_file_path(path)?
+        );
+        Ok(self
+            .http
+            .get(url)
+            .basic_auth(&self.username, Some(&self.app_password))
+            .header("Accept", "*/*"))
+    }
+
+    pub async fn file_history(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        commit: &str,
+        path: &str,
+        pagelen: Option<u32>,
+        page: Option<&str>,
+    ) -> Result<Value, String> {
+        let req =
+            self.file_history_request(workspace_override, repo_slug, commit, path, pagelen, page)?;
+        self.send_json_request(req).await
+    }
+
+    fn file_history_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        commit: &str,
+        path: &str,
+        pagelen: Option<u32>,
+        page: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, String> {
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let url = format!(
+            "{base}/filehistory/{}/{}",
+            commit_path_segment(commit)?,
+            encode_file_path(path)?
+        );
+        let req = Self::paged(self.authed(self.http.get(url)), pagelen, None);
+        Ok(query_nonblank(req, "page", page))
+    }
+
     // --- Commits ---
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_commits(
         &self,
         workspace_override: Option<&str>,
         repo_slug: &str,
         revision: Option<&str>,
+        include: &[String],
+        exclude: &[String],
         pagelen: Option<u32>,
         page: Option<u32>,
+        ctx: Option<&str>,
     ) -> Result<Value, String> {
-        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
-        let rev = revision
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("HEAD");
-        let url = format!("{base}/commits/{rev}");
-        let mut req = self
-            .http
-            .get(&url)
-            .basic_auth(&self.username, Some(&self.app_password));
-        req = req.header("Accept", "application/json");
-        if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
-        }
-        if let Some(p) = page {
-            req = req.query(&[("page", p.to_string())]);
-        }
+        let req = self.list_commits_request(
+            workspace_override,
+            repo_slug,
+            revision,
+            include,
+            exclude,
+            pagelen,
+            page,
+            ctx,
+        )?;
         self.send_json_request(req).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn list_commits_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        revision: Option<&str>,
+        include: &[String],
+        exclude: &[String],
+        pagelen: Option<u32>,
+        page: Option<u32>,
+        ctx: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, String> {
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let rev = revision.map(str::trim).filter(|s| !s.is_empty());
+        let has_range = include.iter().chain(exclude).any(|v| !v.trim().is_empty());
+        let url = match (rev, has_range) {
+            (Some(rev), _) => format!("{base}/commits/{rev}"),
+            (None, false) => format!("{base}/commits/HEAD"),
+            (None, true) => format!("{base}/commits"),
+        };
+        let mut req = self.authed(self.http.get(url));
+        for v in include {
+            req = query_nonblank(req, "include", Some(v.as_str()));
+        }
+        for v in exclude {
+            req = query_nonblank(req, "exclude", Some(v.as_str()));
+        }
+        req = Self::paged(req, pagelen, page);
+        Ok(query_nonblank(req, "ctx", ctx))
     }
 
     pub async fn get_commit(
@@ -914,6 +1078,7 @@ impl BitbucketClient {
 
     // --- Deployments ---
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_deployments(
         &self,
         workspace_override: Option<&str>,
@@ -921,14 +1086,18 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         raw: bool,
+        environment: Option<&str>,
+        sort: Option<&str>,
     ) -> Result<Value, String> {
-        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
-        let req = self
-            .authed(self.http.get(format!("{base}/deployments")))
-            .query(&[("sort", "-state.started_on")]);
-        let value = self
-            .send_json_request(Self::paged(req, pagelen, page))
-            .await?;
+        let req = self.list_deployments_request(
+            workspace_override,
+            repo_slug,
+            pagelen,
+            page,
+            environment,
+            sort,
+        )?;
+        let value = self.send_json_request(req).await?;
         if raw {
             return Ok(value);
         }
@@ -943,6 +1112,27 @@ impl BitbucketClient {
             "size": value.get("size"),
             "deployments": items,
         }))
+    }
+
+    fn list_deployments_request(
+        &self,
+        workspace_override: Option<&str>,
+        repo_slug: &str,
+        pagelen: Option<u32>,
+        page: Option<u32>,
+        environment: Option<&str>,
+        sort: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, String> {
+        let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
+        let sort = sort
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("-state.started_on");
+        let req = self
+            .authed(self.http.get(format!("{base}/deployments")))
+            .query(&[("sort", sort)]);
+        let req = query_nonblank(req, "environment", environment);
+        Ok(Self::paged(req, pagelen, page))
     }
 
     pub async fn list_environments(
@@ -1396,6 +1586,51 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
+/// Percent-encode a repository file path per segment, keeping the `/` separators.
+fn encode_file_path(path: &str) -> Result<String, String> {
+    let trimmed = path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return Err("path must not be empty".into());
+    }
+    let mut segments = Vec::new();
+    for segment in trimmed.split('/') {
+        if segment.is_empty() {
+            return Err("path must not contain empty segments".into());
+        }
+        reject_dot_segment(segment, "path segment")?;
+        segments.push(encode_path_segment(segment));
+    }
+    Ok(segments.join("/"))
+}
+
+/// Trim and percent-encode a commit, tag or branch for use as one path segment.
+fn commit_path_segment(commit: &str) -> Result<String, String> {
+    let commit = require_non_empty(commit, "commit")?;
+    reject_dot_segment(&commit, "commit")?;
+    Ok(encode_path_segment(&commit))
+}
+
+/// Rejects `.` and `..`, which URL parsing would resolve out of the endpoint path.
+fn reject_dot_segment(segment: &str, name: &str) -> Result<(), String> {
+    if segment == "." || segment == ".." {
+        Err(format!("{name} must not be . or .."))
+    } else {
+        Ok(())
+    }
+}
+
+/// Add `key=value` to the query when `value` is present and not blank.
+fn query_nonblank(
+    req: reqwest::RequestBuilder,
+    key: &str,
+    value: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => req.query(&[(key, v)]),
+        None => req,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,5 +1666,258 @@ mod tests {
     fn deployment_summary_parses_build_number_from_release_name() {
         let d = json!({"release": {"name": "#1164"}, "state": {"name": "COMPLETED"}});
         assert_eq!(summarize_deployment(&d)["build_number"], 1164);
+    }
+
+    fn test_client() -> BitbucketClient {
+        let creds = BitbucketCredentials::new(
+            "https://api.bitbucket.org/2.0".into(),
+            "ws".into(),
+            "stub_bb_user_001".into(),
+            "stub_bb_token_001".into(),
+        );
+        BitbucketClient::new(Client::new(), &creds)
+    }
+
+    fn query_pairs(url: &reqwest::Url) -> Vec<(String, String)> {
+        url.query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn list_tags_request_builds_query() {
+        let req = test_client()
+            .list_tags_request(None, "r", Some(2), Some(3), Some("-target.date"), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/refs/tags?pagelen=2&page=3&sort=-target.date"
+        );
+    }
+
+    #[test]
+    fn list_tags_request_passes_q_and_skips_blank_sort() {
+        let req = test_client()
+            .list_tags_request(None, "r", None, None, Some("  "), Some("name ~ \"3.\""))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/refs/tags?q=name+%7E+%223.%22"
+        );
+        assert_eq!(
+            query_pairs(req.url()),
+            vec![("q".to_string(), "name ~ \"3.\"".to_string())]
+        );
+    }
+
+    #[test]
+    fn encode_file_path_keeps_slashes_and_escapes_segments() {
+        assert_eq!(
+            encode_file_path("app/Info.plist"),
+            Ok("app/Info.plist".to_string())
+        );
+        assert_eq!(
+            encode_file_path("/docs/my file#1.md"),
+            Ok("docs/my%20file%231.md".to_string())
+        );
+    }
+
+    #[test]
+    fn encode_file_path_rejects_empty_segments() {
+        assert_eq!(
+            encode_file_path("a//b"),
+            Err("path must not contain empty segments".to_string())
+        );
+        assert_eq!(
+            encode_file_path("  "),
+            Err("path must not be empty".to_string())
+        );
+    }
+
+    #[test]
+    fn encode_file_path_rejects_dot_segments() {
+        assert_eq!(
+            encode_file_path("a/../b"),
+            Err("path segment must not be . or ..".to_string())
+        );
+        assert_eq!(
+            encode_file_path("./a"),
+            Err("path segment must not be . or ..".to_string())
+        );
+    }
+
+    #[test]
+    fn get_file_request_builds_url() {
+        let req = test_client()
+            .get_file_request(None, "r", "3.1.0", "app/Info.plist")
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/src/3.1.0/app/Info.plist"
+        );
+        assert_eq!(req.headers()["accept"].to_str().unwrap(), "*/*");
+    }
+
+    #[test]
+    fn get_file_request_rejects_dot_commit() {
+        let err = test_client()
+            .get_file_request(None, "r", "..", "a.txt")
+            .unwrap_err();
+        assert_eq!(err, "commit must not be . or ..");
+    }
+
+    #[test]
+    fn file_history_request_passes_opaque_page_cursor() {
+        let c = test_client();
+        let req = c
+            .file_history_request(None, "r", "dev", ".gitignore", Some(2), Some("E8Ux"))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/filehistory/dev/.gitignore?pagelen=2&page=E8Ux"
+        );
+        let plain = c
+            .file_history_request(None, "r", "dev", "a", Some(500), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            plain.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/filehistory/dev/a?pagelen=100"
+        );
+    }
+
+    #[test]
+    fn list_commits_request_unchanged_without_include() {
+        let c = test_client();
+        let head = c
+            .list_commits_request(None, "r", None, &[], &[], None, None, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            head.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/commits/HEAD"
+        );
+        let dev = c
+            .list_commits_request(None, "r", Some("dev"), &[], &[], Some(5), Some(2), None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            dev.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/commits/dev?pagelen=5&page=2"
+        );
+        let blank = c
+            .list_commits_request(
+                None,
+                "r",
+                Some(" "),
+                &[" ".to_string()],
+                &[],
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            blank.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/commits/HEAD"
+        );
+    }
+
+    #[test]
+    fn list_commits_request_with_include_exclude_uses_bare_commits_path() {
+        let req = test_client()
+            .list_commits_request(
+                None,
+                "r",
+                None,
+                &["dev".to_string()],
+                &["master".to_string(), "3.0.0".to_string()],
+                Some(2),
+                Some(2),
+                Some("abc"),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/commits?include=dev&exclude=master&exclude=3.0.0&pagelen=2&page=2&ctx=abc"
+        );
+    }
+
+    #[test]
+    fn list_pull_requests_request_adds_sort() {
+        let c = test_client();
+        let sorted = c
+            .list_pull_requests_request(
+                None,
+                "r",
+                Some("MERGED"),
+                Some(50),
+                None,
+                Some("-updated_on"),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            sorted.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/pullrequests?state=MERGED&pagelen=50&sort=-updated_on"
+        );
+        let unsorted = c
+            .list_pull_requests_request(None, "r", Some("MERGED"), Some(50), None, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            unsorted.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/pullrequests?state=MERGED&pagelen=50"
+        );
+    }
+
+    #[test]
+    fn list_deployments_request_default_sort_unchanged() {
+        let req = test_client()
+            .list_deployments_request(None, "r", None, None, None, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/deployments?sort=-state.started_on"
+        );
+    }
+
+    #[test]
+    fn list_deployments_request_with_environment() {
+        let req = test_client()
+            .list_deployments_request(
+                None,
+                "r",
+                Some(5),
+                None,
+                Some("{abc}"),
+                Some("-state.started_on"),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/deployments?sort=-state.started_on&environment=%7Babc%7D&pagelen=5"
+        );
     }
 }

@@ -236,12 +236,14 @@ impl JiraClient {
     }
 
     /// Search issues with JQL via `POST /rest/api/3/search/jql` (replaces removed GET `/search`).
-    /// Paginates with `nextPageToken` so `start_at` still works.
+    /// Paginates with `nextPageToken` so `start_at` still works; `fields` or `next_page_token` make one cursor-mode call.
     pub async fn search_jql(
         &self,
         jql: &str,
         max_results: u32,
         start_at: u32,
+        fields: Option<&[String]>,
+        next_page_token: Option<&str>,
     ) -> Result<Value, String> {
         let jql = jql.trim();
         if jql.is_empty() {
@@ -249,6 +251,16 @@ impl JiraClient {
         }
         let max = max_results.clamp(1, 100);
         let url = format!("{}/search/jql", self.api_root);
+
+        if fields.is_some() || next_page_token.is_some() {
+            check_cursor_start_at(start_at)?;
+            let body = search_jql_cursor_body(jql, max, fields, next_page_token)?;
+            let raw = self
+                .post_json_strict_auth(&url, &body)
+                .await
+                .map_err(|e| format!("Jira search/jql failed: {e}"))?;
+            return Ok(shape_cursor_response(&raw, max, fields.is_some()));
+        }
 
         const PAGE_SIZE: u32 = 100;
         const MAX_PAGES: u32 = 50;
@@ -885,6 +897,20 @@ impl JiraClient {
     }
 
     async fn post_json(&self, url: &str, payload: &Value) -> Result<Value, String> {
+        self.post_json_inner(url, payload, false).await
+    }
+
+    /// Like `post_json`, but a 200 that Jira served anonymously after a failed login becomes an error.
+    async fn post_json_strict_auth(&self, url: &str, payload: &Value) -> Result<Value, String> {
+        self.post_json_inner(url, payload, true).await
+    }
+
+    async fn post_json_inner(
+        &self,
+        url: &str,
+        payload: &Value,
+        strict_auth: bool,
+    ) -> Result<Value, String> {
         let response = self
             .http
             .post(url)
@@ -897,6 +923,11 @@ impl JiraClient {
             .map_err(|e| format!("Jira request failed: {e}"))?;
 
         let status = response.status();
+        let login_reason = response
+            .headers()
+            .get("X-Seraph-LoginReason")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         let bytes = response
             .bytes()
             .await
@@ -905,6 +936,9 @@ impl JiraClient {
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
             return Err(format!("Jira returned {status}: {msg}"));
+        }
+        if strict_auth && let Some(err) = login_failure(login_reason.as_deref()) {
+            return Err(err);
         }
 
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
@@ -955,6 +989,102 @@ pub(crate) fn slim_search_issue(issue: &serde_json::Map<String, Value>) -> Value
         }),
         "assignee": fields.and_then(|f| f.get("assignee")).map(slim_user),
         "updated": fields.and_then(|f| f.get("updated")).and_then(|u| u.as_str()),
+    })
+}
+
+/// Request body for one cursor-mode `search/jql` call; `fields` defaults to the slim field list.
+fn search_jql_cursor_body(
+    jql: &str,
+    max: u32,
+    fields: Option<&[String]>,
+    token: Option<&str>,
+) -> Result<Value, String> {
+    let fields: Vec<String> = match fields {
+        None => [
+            "key",
+            "summary",
+            "status",
+            "issuetype",
+            "assignee",
+            "updated",
+        ]
+        .iter()
+        .map(|f| f.to_string())
+        .collect(),
+        Some(list) => {
+            let kept: Vec<String> = list
+                .iter()
+                .map(|f| f.trim())
+                .filter(|f| !f.is_empty())
+                .map(str::to_string)
+                .collect();
+            if kept.is_empty() {
+                return Err("fields must list at least one field".into());
+            }
+            kept
+        }
+    };
+    let mut body = json!({
+        "jql": jql,
+        "maxResults": max.clamp(1, 100),
+        "fields": fields,
+    });
+    if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
+        body["nextPageToken"] = json!(t);
+    }
+    Ok(body)
+}
+
+/// Jira answers bad credentials with 200 as anonymous and sets `X-Seraph-LoginReason`.
+fn login_failure(reason: Option<&str>) -> Option<String> {
+    match reason {
+        Some(r) if r.contains("AUTHENTICATED_FAILED") || r.contains("AUTHENTICATION_DENIED") => {
+            Some(format!(
+                "Jira returned 401 Unauthorized: X-Seraph-LoginReason {r} (check email and API token)"
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Cursor mode pages by `nextPageToken` only, so `start_at` must be 0.
+fn check_cursor_start_at(start_at: u32) -> Result<(), String> {
+    if start_at > 0 {
+        return Err(
+            "start_at cannot be combined with fields or next_page_token; page with next_page_token"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Shapes one cursor-mode response; `raw_issues` keeps Jira's issue objects untouched.
+fn shape_cursor_response(raw: &Value, max: u32, raw_issues: bool) -> Value {
+    let issues: Vec<Value> = raw
+        .get("issues")
+        .and_then(Value::as_array)
+        .map(|items| {
+            if raw_issues {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter_map(|i| i.as_object().map(slim_search_issue))
+                    .collect()
+            }
+        })
+        .unwrap_or_default();
+    let total = raw
+        .get("total")
+        .cloned()
+        .or_else(|| raw.get("totalIssueCount").cloned());
+    json!({
+        "startAt": 0,
+        "maxResults": max,
+        "total": total,
+        "issues": issues,
+        "isLast": raw.get("isLast").and_then(Value::as_bool).unwrap_or(true),
+        "nextPageToken": raw.get("nextPageToken").and_then(Value::as_str),
     })
 }
 
@@ -1281,5 +1411,114 @@ mod tests {
         let s = r#"{"type":"doc","version":1,"content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Hi"}]}]}"#;
         let v = document_from_content_format("adf", s).expect("doc");
         assert_eq!(v["content"][0]["type"], "heading");
+    }
+
+    fn cursor_fake_response() -> Value {
+        json!({
+            "issues": [{"id": "1", "key": "PROJ-1", "fields": {"summary": "s", "labels": ["a"]}}],
+            "isLast": false,
+            "nextPageToken": "tok"
+        })
+    }
+
+    #[test]
+    fn cursor_body_uses_given_fields_and_token() {
+        let fields = vec![
+            "summary".to_string(),
+            " labels ".to_string(),
+            "".to_string(),
+        ];
+        let body =
+            search_jql_cursor_body("project = SIOS", 500, Some(fields.as_slice()), Some("tok"))
+                .unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "jql": "project = SIOS",
+                "maxResults": 100,
+                "fields": ["summary", "labels"],
+                "nextPageToken": "tok"
+            })
+        );
+        let default = search_jql_cursor_body("project = SIOS", 25, None, Some("  ")).unwrap();
+        assert_eq!(
+            default,
+            json!({
+                "jql": "project = SIOS",
+                "maxResults": 25,
+                "fields": ["key", "summary", "status", "issuetype", "assignee", "updated"]
+            })
+        );
+    }
+
+    #[test]
+    fn cursor_body_rejects_empty_fields() {
+        let empty: Vec<String> = Vec::new();
+        let blank = vec!["  ".to_string()];
+        assert_eq!(
+            search_jql_cursor_body("x", 5, Some(empty.as_slice()), None),
+            Err("fields must list at least one field".to_string())
+        );
+        assert_eq!(
+            search_jql_cursor_body("x", 5, Some(blank.as_slice()), None),
+            Err("fields must list at least one field".to_string())
+        );
+    }
+
+    #[test]
+    fn cursor_mode_rejects_start_at() {
+        assert_eq!(check_cursor_start_at(0), Ok(()));
+        assert_eq!(
+            check_cursor_start_at(1),
+            Err(
+                "start_at cannot be combined with fields or next_page_token; page with next_page_token"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn cursor_mode_keeps_raw_issues_when_fields_given() {
+        let out = shape_cursor_response(&cursor_fake_response(), 25, true);
+        assert_eq!(out["issues"][0]["fields"]["labels"][0], "a");
+        assert_eq!(out["issues"][0]["id"], "1");
+        assert_eq!(out["nextPageToken"], "tok");
+        assert_eq!(out["isLast"], false);
+        assert_eq!(out["startAt"], 0);
+        assert_eq!(out["maxResults"], 25);
+        assert!(out["total"].is_null());
+    }
+
+    #[test]
+    fn cursor_mode_maps_issues_when_only_token_given() {
+        let out = shape_cursor_response(&cursor_fake_response(), 25, false);
+        assert_eq!(
+            out["issues"],
+            json!([{
+                "key": "PROJ-1",
+                "summary": "s",
+                "status": null,
+                "issuetype": null,
+                "assignee": null,
+                "updated": null
+            }])
+        );
+    }
+
+    #[test]
+    fn cursor_mode_reads_total_issue_count() {
+        let raw = json!({"issues": [], "totalIssueCount": 7});
+        let out = shape_cursor_response(&raw, 25, true);
+        assert_eq!(out["total"], 7);
+        assert_eq!(out["isLast"], true);
+        assert!(out["nextPageToken"].is_null());
+    }
+
+    #[test]
+    fn login_failure_flags_failed_basic_auth() {
+        let e = login_failure(Some("AUTHENTICATED_FAILED")).unwrap();
+        assert!(e.starts_with("Jira returned 401 Unauthorized: "));
+        assert!(login_failure(Some("OK")).is_none());
+        assert!(login_failure(None).is_none());
     }
 }

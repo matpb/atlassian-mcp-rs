@@ -5,7 +5,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::bitbucket::{BitbucketClient, PipelineVariable};
@@ -129,12 +129,18 @@ struct CreateIssueParams {
 struct SearchJqlParams {
     /// Jira Query Language string
     jql: String,
-    /// Maximum issues to return (1–100, default 25)
+    /// Maximum issues to return (1 to 100, default 25)
     #[serde(default = "default_max_results")]
     max_results: u32,
     /// Pagination offset (default 0)
     #[serde(default)]
     start_at: u32,
+    /// Jira field names to return untouched, e.g. `["summary", "labels"]`. Switches to single-page cursor mode.
+    #[serde(default)]
+    fields: Option<Vec<String>>,
+    /// `nextPageToken` from a previous response. Switches to single-page cursor mode.
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 fn default_max_results() -> u32 {
@@ -145,7 +151,7 @@ fn default_max_results() -> u32 {
 struct SearchUsersParams {
     /// Search term matched against user display name and email address
     query: String,
-    /// Maximum users to return (1–50, default 10)
+    /// Maximum users to return (1 to 50, default 10)
     #[serde(default = "default_user_search_max")]
     max_results: u32,
 }
@@ -193,7 +199,7 @@ struct GetChangelogParams {
     /// Only return changes to this field, e.g. `status`, `assignee`, `Sprint`. Omit for every field.
     #[serde(default)]
     field: Option<String>,
-    /// Maximum change entries to return (1–100, default 50)
+    /// Maximum change entries to return (1 to 100, default 50)
     #[serde(default = "default_changelog_max")]
     max_results: u32,
     /// Pagination offset into the changelog (default 0, oldest first)
@@ -276,7 +282,7 @@ struct MoveBoardIssuesParams {
 struct ConfluenceSearchParams {
     /// Confluence Query Language string, e.g. `type=page and space=TEAM`
     cql: String,
-    /// Max hits (1–100, default 25)
+    /// Max hits (1 to 100, default 25)
     #[serde(default = "default_max_results")]
     limit: u32,
 }
@@ -297,7 +303,7 @@ fn default_status() -> String {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ConfluenceCreatePageParams {
-    /// Confluence space ID (numeric string) or space key (e.g. "SIKU")
+    /// Confluence space ID (numeric string) or space key (e.g. "DOCS")
     space_id: String,
     /// Page title
     title: String,
@@ -340,13 +346,16 @@ struct BbListPrsParams {
     #[serde(default)]
     workspace: Option<String>,
     repo_slug: String,
-    /// OPEN, MERGED, DECLINED, SUPERSEDED — omit for all active states per API defaults
+    /// OPEN, MERGED, DECLINED, SUPERSEDED; omit for all active states per API defaults
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
     page: Option<u32>,
+    /// Bitbucket sort, e.g. `-updated_on`. Omit for Bitbucket's default order.
+    #[serde(default)]
+    sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -449,10 +458,19 @@ struct BbListCommitsParams {
     /// Branch name, tag, or commit; default `HEAD`
     #[serde(default)]
     revision: Option<String>,
+    /// Commits reachable from these refs: one string or a list of strings
+    #[serde(default, deserialize_with = "string_or_vec")]
+    include: Vec<String>,
+    /// Commits not reachable from these refs: one string or a list of strings
+    #[serde(default, deserialize_with = "string_or_vec")]
+    exclude: Vec<String>,
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
     page: Option<u32>,
+    /// `ctx` value from the `next` link, passed for later pages
+    #[serde(default)]
+    ctx: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -461,6 +479,86 @@ struct BbGetCommitParams {
     workspace: Option<String>,
     repo_slug: String,
     commit: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbListTagsParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    #[serde(default)]
+    page: Option<u32>,
+    /// Bitbucket sort, e.g. `-target.date`
+    #[serde(default)]
+    sort: Option<String>,
+    /// Bitbucket filter expression (`q`), e.g. `name ~ "3."`
+    #[serde(default)]
+    q: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbGetFileParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Commit hash, tag or branch
+    commit: String,
+    /// File path inside the repository, e.g. `app/Info.plist`
+    path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct BbFileHistoryParams {
+    #[serde(default)]
+    workspace: Option<String>,
+    repo_slug: String,
+    /// Commit hash, tag or branch
+    commit: String,
+    /// File path inside the repository, e.g. `app/Info.plist`
+    path: String,
+    #[serde(default)]
+    pagelen: Option<u32>,
+    /// Opaque cursor: the `page` value of Bitbucket's `next` link, passed verbatim (string or number)
+    #[serde(default, deserialize_with = "string_or_number_opt")]
+    page: Option<String>,
+}
+
+/// Accepts one JSON string or a list of strings; null or absent gives an empty list.
+fn string_or_vec<'de, D>(de: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(de)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(s)) => vec![s],
+        Some(OneOrMany::Many(v)) => v,
+    })
+}
+
+/// Accepts a JSON string or integer as an opaque string; null or absent gives `None`.
+fn string_or_number_opt<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StrOrInt {
+        Str(String),
+        Int(i64),
+    }
+    Ok(match Option::<StrOrInt>::deserialize(de)? {
+        None => None,
+        Some(StrOrInt::Str(s)) => Some(s),
+        Some(StrOrInt::Int(n)) => Some(n.to_string()),
+    })
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -520,7 +618,7 @@ struct BbListPipelinesParams {
     #[serde(default)]
     workspace: Option<String>,
     repo_slug: String,
-    /// Page size (1–100, default 10). Newest first.
+    /// Page size (1 to 100, default 10). Newest first.
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -601,6 +699,12 @@ struct BbListDeploymentsParams {
     /// Return Bitbucket's full deployment objects instead of the compact summary.
     #[serde(default)]
     raw: bool,
+    /// Environment UUID, as listed by `bitbucket_list_deployment_environments`, braces included
+    #[serde(default)]
+    environment: Option<String>,
+    /// Bitbucket sort; default `-state.started_on`
+    #[serde(default)]
+    sort: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1049,7 +1153,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "jira_search",
-        description = "Search Jira issues using JQL via POST /rest/api/3/search/jql. Returns trimmed issues plus isLast and nextPageToken for cursor pagination (offset start_at is applied by fetching pages until enough issues are skipped)."
+        description = "Search Jira issues using JQL via POST /rest/api/3/search/jql. Returns trimmed issues plus isLast and nextPageToken for cursor pagination (offset start_at is applied by fetching pages until enough issues are skipped). Optional `fields` (list of Jira field names) returns Jira's untouched issues (key + fields map); optional `next_page_token` continues from a previous response. Either one switches to single-page cursor mode (no start_at)."
     )]
     async fn jira_search(
         &self,
@@ -1059,7 +1163,13 @@ impl AtlassianMcp {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
         let value = jira
-            .search_jql(&p.jql, p.max_results, p.start_at)
+            .search_jql(
+                &p.jql,
+                p.max_results,
+                p.start_at,
+                p.fields.as_deref(),
+                p.next_page_token.as_deref(),
+            )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
@@ -1338,6 +1448,32 @@ impl AtlassianMcp {
     }
 
     #[tool(
+        name = "bitbucket_list_tags",
+        description = "List tags (GET .../refs/tags). Returns Bitbucket's JSON unchanged: values[].name, values[].target.hash, values[].target.date, next. Optional `sort` (e.g. -target.date) and `q` filter."
+    )]
+    async fn bitbucket_list_tags(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbListTagsParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .list_tags(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                p.pagelen,
+                p.page,
+                p.sort.as_deref(),
+                p.q.as_deref(),
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
         name = "bitbucket_list_pull_requests",
         description = "List pull requests for a repository. Optional `state`: OPEN, MERGED, DECLINED, SUPERSEDED."
     )]
@@ -1355,6 +1491,7 @@ impl AtlassianMcp {
                 p.state.as_deref(),
                 p.pagelen,
                 p.page,
+                p.sort.as_deref(),
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
@@ -1641,7 +1778,7 @@ impl AtlassianMcp {
 
     #[tool(
         name = "bitbucket_list_commits",
-        description = "List commits reachable from `revision` (branch name, tag, or commit; default HEAD)."
+        description = "List commits. `revision` (branch, tag or commit; default HEAD) or `include`/`exclude` (commits reachable from include and not from exclude, each a string or list). Bitbucket JSON unchanged (values, next); for later pages pass `page` and, if present in the `next` link, `ctx`."
     )]
     async fn bitbucket_list_commits(
         &self,
@@ -1655,8 +1792,11 @@ impl AtlassianMcp {
                 bb_workspace_override(&p.workspace),
                 &p.repo_slug,
                 p.revision.as_deref(),
+                &p.include,
+                &p.exclude,
                 p.pagelen,
                 p.page,
+                p.ctx.as_deref(),
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
@@ -1677,6 +1817,53 @@ impl AtlassianMcp {
         let bb = BitbucketClient::new(self.http.clone(), &creds);
         let value = bb
             .get_commit(bb_workspace_override(&p.workspace), &p.repo_slug, &p.commit)
+            .await
+            .map_err(|e| ErrorData::internal_error(e, None))?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "bitbucket_get_file",
+        description = "Raw file content at a commit, tag or branch (GET .../src/{commit}/{path}), returned as plain text. A missing file fails with `Bitbucket returned 404 Not Found: ...`."
+    )]
+    async fn bitbucket_get_file(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbGetFileParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        bb.get_file(
+            bb_workspace_override(&p.workspace),
+            &p.repo_slug,
+            &p.commit,
+            &p.path,
+        )
+        .await
+        .map_err(|e| ErrorData::internal_error(e, None))
+    }
+
+    #[tool(
+        name = "bitbucket_file_history",
+        description = "Commits that touched a file (GET .../filehistory/{commit}/{path}), Bitbucket JSON unchanged: values[].commit.hash, next. `page` is the opaque cursor from the `next` link's page= value, passed verbatim."
+    )]
+    async fn bitbucket_file_history(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<BbFileHistoryParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve_bitbucket(&parts)?;
+        let bb = BitbucketClient::new(self.http.clone(), &creds);
+        let value = bb
+            .file_history(
+                bb_workspace_override(&p.workspace),
+                &p.repo_slug,
+                &p.commit,
+                &p.path,
+                p.pagelen,
+                p.page.as_deref(),
+            )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
         serde_json::to_string_pretty(&value)
@@ -1997,6 +2184,8 @@ impl AtlassianMcp {
                 p.pagelen,
                 p.page,
                 p.raw,
+                p.environment.as_deref(),
+                p.sort.as_deref(),
             )
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
@@ -2291,5 +2480,40 @@ mod tests {
             .expect("done filter present");
         let order_idx = out.find("ORDER BY").expect("order by present");
         assert!(done_idx < order_idx);
+    }
+
+    #[test]
+    fn page_cursor_accepts_string_or_number() {
+        let parse = |extra: &str| -> BbFileHistoryParams {
+            let text = format!(r#"{{"repo_slug":"r","commit":"dev","path":"a"{extra}}}"#);
+            serde_json::from_str(&text).expect("params")
+        };
+        assert_eq!(parse(r#","page":2"#).page.as_deref(), Some("2"));
+        assert_eq!(parse(r#","page":"E8Ux""#).page.as_deref(), Some("E8Ux"));
+        assert_eq!(parse(r#","page":null"#).page, None);
+        assert_eq!(parse("").page, None);
+    }
+
+    #[test]
+    fn include_accepts_string_or_list() {
+        let parse = |extra: &str| -> BbListCommitsParams {
+            let text = format!(r#"{{"repo_slug":"r"{extra}}}"#);
+            serde_json::from_str(&text).expect("params")
+        };
+        assert_eq!(
+            parse(r#","include":"dev""#).include,
+            vec!["dev".to_string()]
+        );
+        assert_eq!(
+            parse(r#","include":["dev","x"]"#).include,
+            vec!["dev".to_string(), "x".to_string()]
+        );
+        assert_eq!(
+            parse(r#","exclude":"master""#).exclude,
+            vec!["master".to_string()]
+        );
+        assert!(parse(r#","include":null"#).include.is_empty());
+        assert!(parse("").exclude.is_empty());
+        assert!(parse("").include.is_empty());
     }
 }
