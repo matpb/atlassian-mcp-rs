@@ -5,13 +5,14 @@ This codebase is yours: what it's for and how it's built are your call, and you'
 ## Ground rules
 - The server stores no credentials. Every Atlassian and Bitbucket credential arrives as HTTP headers on each `POST /mcp` request; never add env vars, files or caches that hold tokens.
 - Run `cargo fmt --all` before committing: CI fails on `cargo fmt --all -- --check`, and that has broken master before.
-- Every new tool lands with its README tool-table row and a unit test for its request or payload builder.
+- Every new tool lands with its README tool-table row and a contract test in `src/contract_tests/<product>.rs` asserting its outgoing request and its output. Then refresh the tools/list snapshot: `UPDATE_TOOLS_SNAPSHOT=1 cargo test tools_list_matches_snapshot` and review the fixture diff.
 - Test against real Jira or Bitbucket only on a throwaway issue or PR you created yourself, then clean it up.
 - Public repo: no site URLs, emails, tokens, hostnames or workspace names in code, tests, README or commits. Tests use stub literals that do not look like credentials.
 
 ## Commands
 - Build: `cargo build --release`
-- Test, full suite (about 66 tests, under a second): `cargo test`
+- Test, full suite (about 290 tests, under a second): `cargo test`
+- Coverage: `cargo llvm-cov --summary-only --ignore-filename-regex contract_tests`
 - Test, one name filter: `cargo test summary_payload`
 - Lint: `cargo clippy --all-targets -- -D warnings`
 - Format check (what CI runs): `cargo fmt --all -- --check`
@@ -25,6 +26,8 @@ This codebase is yours: what it's for and how it's built are your call, and you'
 - `src/jira.rs`, `src/confluence.rs`, `src/bitbucket.rs` are the HTTP clients; payload builders live there as plain functions so they can be unit tested without a network.
 - `src/credentials.rs` reads the request headers (`X-Atlassian-*`, `X-Bitbucket-*`) from the axum `Parts` extension.
 - `src/upload.rs` serves `/upload/{token}`, the signed one-shot URL behind `jira_get_attachment_upload_url`, outside the MCP protocol.
+- `src/contract_tests/` (test only) runs the real app from `build_app` in `src/main.rs` over HTTP. `harness.rs` has `Mcp` (JSON-RPC calls with stub creds) and `FakeAtlassian` (records requests, scripted replies, 599 for unmatched routes). `fixtures/tools_list.json` is the tools/list snapshot.
+- A test that asserts behaviour that looks wrong carries a `// Pins current behaviour:` comment; grep for it before changing that behaviour.
 
 ## Conventions
 - New tool: copy the closest existing one (for example `jira_update_description` or `jira_update_summary`) for naming, description wording and output shape.
@@ -35,7 +38,8 @@ This codebase is yours: what it's for and how it's built are your call, and you'
 - Comments are one or two factual lines.
 
 ## Landmines
-- Do not switch back to stateful sessions: clients hit "session not found" after idle periods. `NeverSessionManager` plus `stateful_mode: false` in `src/main.rs` makes each request independent, which works because credentials are per request.
+- Do not switch back to stateful sessions: clients hit "session not found" after idle periods. `NeverSessionManager` plus `with_legacy_session_mode(false)` in `mcp_http_config()` in `src/main.rs` makes each request independent, which works because credentials are per request.
+- Keep `.disable_allowed_hosts()` in `mcp_http_config()`: rmcp 3.x accepts only loopback `Host` headers by default, and the reverse proxy forwards the public host, so every request would get 403. `public_host_header_is_accepted` guards it.
 - Do not take the upload body as a `Bytes` extractor in `handle_upload`: it buffers the whole body before the token check, so anyone can make the server allocate up to the upload cap with a bogus token. Validate the token first, then read the body with a limit.
 - Upload tickets live in process memory: they vanish on restart and do not work across replicas. Behind a proxy, set `MCP_PUBLIC_URL` (or forward `X-Forwarded-Proto`/`Host`) or the returned URL falls back to the raw `Host` header over plain `http` (`upload::public_origin`).
 - `X-Bitbucket-Username` must be the Atlassian account email. The static `x-bitbucket-api-token-auth` username works for git over HTTPS but the REST API rejects it with 401.

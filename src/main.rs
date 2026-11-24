@@ -6,6 +6,9 @@ mod jira;
 mod mcp;
 mod upload;
 
+#[cfg(test)]
+mod contract_tests;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -38,40 +41,12 @@ async fn main() {
     tracing::info!(?cfg, "Starting Atlassian MCP (streamable HTTP)");
 
     let http = JiraClient::build_http_client().expect("build HTTP client");
-    let http = Arc::new(http);
-
-    let tickets = UploadTickets::default();
-    let upload_state = UploadState {
-        http: (*http).clone(),
-        tickets: tickets.clone(),
-        max_bytes: cfg.max_upload_bytes,
-    };
-    let public_url = cfg.public_url.clone();
-
-    let mcp_service = StreamableHttpService::new(
-        move || {
-            Ok(AtlassianMcp::new(
-                (*http).clone(),
-                tickets.clone(),
-                public_url.clone(),
-            ))
-        },
-        Arc::new(NeverSessionManager::default()),
-        mcp_http_config(),
+    let app = build_app(
+        http,
+        UploadTickets::default(),
+        cfg.public_url.clone(),
+        cfg.max_upload_bytes,
     );
-
-    let app = axum::Router::new()
-        .route("/health", axum::routing::get(health))
-        .route("/mcp", axum::routing::any_service(mcp_service))
-        .route(
-            "/upload/{token}",
-            axum::routing::put(upload::handle_upload)
-                .post(upload::handle_upload)
-                .layer(DefaultBodyLimit::disable())
-                .with_state(upload_state),
-        )
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
 
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port).parse().unwrap();
     let listener = TcpListener::bind(addr).await.unwrap();
@@ -86,6 +61,45 @@ async fn main() {
         .with_graceful_shutdown(shutdown)
         .await
         .unwrap();
+}
+
+/// Router with the MCP endpoint, the upload endpoint and the health check.
+pub(crate) fn build_app(
+    http: reqwest::Client,
+    tickets: UploadTickets,
+    public_url: Option<String>,
+    max_upload_bytes: usize,
+) -> axum::Router {
+    let upload_state = UploadState {
+        http: http.clone(),
+        tickets: tickets.clone(),
+        max_bytes: max_upload_bytes,
+    };
+
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            Ok(AtlassianMcp::new(
+                http.clone(),
+                tickets.clone(),
+                public_url.clone(),
+            ))
+        },
+        Arc::new(NeverSessionManager::default()),
+        mcp_http_config(),
+    );
+
+    axum::Router::new()
+        .route("/health", axum::routing::get(health))
+        .route("/mcp", axum::routing::any_service(mcp_service))
+        .route(
+            "/upload/{token}",
+            axum::routing::put(upload::handle_upload)
+                .post(upload::handle_upload)
+                .layer(DefaultBodyLimit::disable())
+                .with_state(upload_state),
+        )
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
 }
 
 // Host validation is off: the server holds no credentials and runs behind APISIX, which forwards the public Host.

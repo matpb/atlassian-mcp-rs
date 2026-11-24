@@ -2552,4 +2552,46 @@ mod tests {
                 .starts_with("Atlassian Cloud MCP")
         );
     }
+
+    #[test]
+    fn validate_issue_keys_accepts_one_and_fifty() {
+        let keys = |n: usize| -> Vec<String> { (0..n).map(|i| format!("SWS-{i}")).collect() };
+        assert!(validate_issue_keys(&keys(1)).is_ok());
+        assert!(validate_issue_keys(&keys(50)).is_ok());
+    }
+
+    #[test]
+    fn validate_issue_keys_rejects_empty_and_fifty_one() {
+        let err = validate_issue_keys(&[]).unwrap_err();
+        assert_eq!(err.code.0, -32602);
+        assert_eq!(err.message, "issue_keys must not be empty");
+
+        let keys: Vec<String> = (0..51).map(|i| format!("SWS-{i}")).collect();
+        let err = validate_issue_keys(&keys).unwrap_err();
+        assert_eq!(err.code.0, -32602);
+        assert_eq!(
+            err.message,
+            "issue_keys has 51 entries; Jira caps this endpoint at 50 per call"
+        );
+    }
+
+    #[test]
+    fn validate_issue_keys_does_not_trim_keys() {
+        // Pins current behaviour: a blank key passes validation and goes to Jira unchanged.
+        assert!(validate_issue_keys(&["  ".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn extract_keys_skips_items_without_a_string_key() {
+        let issues = vec![
+            serde_json::json!({"key": "A-1"}),
+            serde_json::json!({"key": 7}),
+            serde_json::json!({"id": "x"}),
+            serde_json::json!({"key": "A-2", "fields": {}}),
+        ];
+        assert_eq!(
+            extract_keys(&issues),
+            vec!["A-1".to_string(), "A-2".to_string()]
+        );
+    }
 }

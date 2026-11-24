@@ -412,4 +412,124 @@ mod tests {
             MAX_CONFLUENCE_BODY_CHARS + 50
         );
     }
+
+    #[test]
+    fn slim_search_hit_prefers_content_and_hit_title() {
+        let hit = json!({
+            "content": {
+                "id": "111",
+                "type": "page",
+                "status": "current",
+                "title": "Inner",
+                "_links": {"webui": "/spaces/OPS/pages/111"}
+            },
+            "title": "Outer",
+            "excerpt": "Restart <span>queue</span>",
+            "url": "/noise",
+            "score": 0.5
+        });
+        assert_eq!(
+            slim_search_hit(&hit),
+            json!({
+                "id": "111",
+                "type": "page",
+                "status": "current",
+                "title": "Outer",
+                "excerpt": "Restart <span>queue</span>",
+                "webui": "/spaces/OPS/pages/111"
+            })
+        );
+    }
+
+    #[test]
+    fn slim_search_hit_falls_back_to_top_level_fields() {
+        let hit = json!({"id": "222", "type": "blogpost", "title": "Top", "excerpt": "e"});
+        assert_eq!(
+            slim_search_hit(&hit),
+            json!({
+                "id": "222",
+                "type": "blogpost",
+                "status": null,
+                "title": "Top",
+                "excerpt": "e",
+                "webui": null
+            })
+        );
+    }
+
+    #[test]
+    fn slim_search_hit_takes_title_from_content_when_hit_has_none() {
+        let hit = json!({"content": {"id": "333", "title": "Inner only"}, "id": "999"});
+        let slim = slim_search_hit(&hit);
+        assert_eq!(slim["id"], "333");
+        assert_eq!(slim["title"], "Inner only");
+    }
+
+    #[test]
+    fn slim_search_hit_empty_object_gives_all_null() {
+        assert_eq!(
+            slim_search_hit(&json!({})),
+            json!({
+                "id": null,
+                "type": null,
+                "status": null,
+                "title": null,
+                "excerpt": null,
+                "webui": null
+            })
+        );
+    }
+
+    #[test]
+    fn slim_search_hit_numeric_id_is_dropped() {
+        // Pins current behaviour: a numeric id is not a string, so it becomes null.
+        let slim = slim_search_hit(&json!({"content": {"id": 444}}));
+        assert_eq!(slim["id"], Value::Null);
+    }
+
+    #[test]
+    fn encode_path_segment_keeps_unreserved_and_encodes_the_rest() {
+        assert_eq!(encode_path_segment("AZaz09-_"), "AZaz09-_");
+        assert_eq!(encode_path_segment("DOCS"), "DOCS");
+        assert_eq!(encode_path_segment("a b/c%"), "a%20b%2Fc%25");
+        assert_eq!(encode_path_segment("é"), "%C3%A9");
+        assert_eq!(encode_path_segment(""), "");
+    }
+
+    #[test]
+    fn truncate_chars_returns_short_input_unchanged() {
+        assert_eq!(truncate_chars("héllo", 10), ("héllo".to_string(), 5, false));
+        assert_eq!(truncate_chars("héllo", 5), ("héllo".to_string(), 5, false));
+        assert_eq!(truncate_chars("", 0), (String::new(), 0, false));
+    }
+
+    #[test]
+    fn truncate_chars_cuts_on_char_boundary_for_multibyte_input() {
+        let (text, total, truncated) = truncate_chars("héllo😀", 2);
+        assert_eq!(
+            text,
+            "hé\n\n[… truncated for MCP: included 2 of 6 characters]"
+        );
+        assert_eq!(total, 6);
+        assert!(truncated);
+
+        let (text, total, truncated) = truncate_chars("😀😀😀", 1);
+        assert_eq!(
+            text,
+            "😀\n\n[… truncated for MCP: included 1 of 3 characters]"
+        );
+        assert_eq!(total, 3);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn truncate_chars_zero_max_keeps_only_the_note() {
+        let (text, total, truncated) = truncate_chars("abc", 0);
+        assert_eq!(
+            text,
+            "\n\n[… truncated for MCP: included 0 of 3 characters]"
+        );
+        assert_eq!(total, 3);
+        assert!(truncated);
+    }
 }

@@ -1521,4 +1521,176 @@ mod tests {
         assert!(login_failure(Some("OK")).is_none());
         assert!(login_failure(None).is_none());
     }
+
+    #[test]
+    fn slim_search_issue_keeps_documented_fields_and_drops_noise() {
+        let issue = json!({
+            "expand": "operations",
+            "id": "10000",
+            "key": "SWS-1",
+            "self": "https://example.invalid/rest/api/3/issue/10000",
+            "fields": {
+                "summary": "Fix login",
+                "priority": {"name": "High"},
+                "labels": ["auth"],
+                "status": {"name": "In Progress", "id": "3", "statusCategory": {"key": "indeterminate", "name": "In Progress", "colorName": "yellow"}},
+                "issuetype": {"name": "Bug", "id": "10004", "subtask": false},
+                "assignee": {"accountId": "acc-1", "displayName": "Test User", "emailAddress": "test.user@example.invalid", "active": true},
+                "updated": "2026-11-01T10:00:00.000+0000"
+            }
+        });
+        assert_eq!(
+            slim_search_issue(issue.as_object().unwrap()),
+            json!({
+                "key": "SWS-1",
+                "summary": "Fix login",
+                "status": {"name": "In Progress", "id": "3", "statusCategory": {"key": "indeterminate", "name": "In Progress"}},
+                "issuetype": {"name": "Bug"},
+                "assignee": {"displayName": "Test User", "emailAddress": "test.user@example.invalid"},
+                "updated": "2026-11-01T10:00:00.000+0000"
+            })
+        );
+    }
+
+    #[test]
+    fn slim_search_issue_with_null_and_missing_fields_gives_nulls() {
+        let unassigned = json!({
+            "key": "SWS-2",
+            "fields": {"summary": "No owner", "assignee": null, "issuetype": null, "status": null}
+        });
+        assert_eq!(
+            slim_search_issue(unassigned.as_object().unwrap()),
+            json!({
+                "key": "SWS-2",
+                "summary": "No owner",
+                "status": null,
+                "issuetype": null,
+                "assignee": null,
+                "updated": null
+            })
+        );
+        let bare = json!({"key": "SWS-3"});
+        assert_eq!(
+            slim_search_issue(bare.as_object().unwrap()),
+            json!({
+                "key": "SWS-3",
+                "summary": null,
+                "status": null,
+                "issuetype": null,
+                "assignee": null,
+                "updated": null
+            })
+        );
+    }
+
+    #[test]
+    fn slim_comment_adds_adf_only_when_asked() {
+        let comment = json!({
+            "id": "10100",
+            "self": "https://example.invalid/rest/api/3/comment/10100",
+            "author": {"displayName": "Test User", "emailAddress": "test.user@example.invalid", "accountId": "acc-1"},
+            "body": {"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "Looks good"}]}
+            ]},
+            "created": "2026-11-02T10:00:00.000+0000",
+            "updated": "2026-11-02T10:05:00.000+0000",
+            "visibility": {"type": "role"}
+        });
+        let obj = comment.as_object().unwrap();
+        assert_eq!(
+            slim_comment(obj, false),
+            json!({
+                "id": "10100",
+                "author": {"displayName": "Test User", "emailAddress": "test.user@example.invalid"},
+                "created": "2026-11-02T10:00:00.000+0000",
+                "updated": "2026-11-02T10:05:00.000+0000",
+                "body": "Looks good"
+            })
+        );
+        let with_adf = slim_comment(obj, true);
+        assert_eq!(with_adf["body"], "Looks good");
+        assert_eq!(with_adf["body_adf"], comment["body"]);
+    }
+
+    #[test]
+    fn slim_comment_without_body_or_author_gives_nulls() {
+        let comment = json!({"id": "10101", "created": 1700000000});
+        let obj = comment.as_object().unwrap();
+        assert_eq!(
+            slim_comment(obj, true),
+            json!({
+                "id": "10101",
+                "author": null,
+                "created": null,
+                "updated": null,
+                "body": null,
+                "body_adf": null
+            })
+        );
+    }
+
+    #[test]
+    fn slim_user_handles_null_and_partial_users() {
+        assert_eq!(slim_user(&Value::Null), Value::Null);
+        assert_eq!(
+            slim_user(&json!({"displayName": "Test User", "accountId": "acc-1"})),
+            json!({"displayName": "Test User", "emailAddress": null})
+        );
+    }
+
+    #[test]
+    fn slim_status_keeps_category_and_tolerates_missing_parts() {
+        assert_eq!(slim_status(&Value::Null), Value::Null);
+        assert_eq!(
+            slim_status(&json!({"name": "Done", "id": "10002"})),
+            json!({"name": "Done", "id": "10002", "statusCategory": null})
+        );
+        assert_eq!(
+            slim_status(&json!({
+                "name": "Done",
+                "id": "10002",
+                "statusCategory": {"key": "done", "name": "Done", "colorName": "green"}
+            })),
+            json!({"name": "Done", "id": "10002", "statusCategory": {"key": "done", "name": "Done"}})
+        );
+    }
+
+    #[test]
+    fn slim_attachment_keeps_numeric_size_and_nulls_missing_parts() {
+        let full = json!({
+            "id": "10001",
+            "filename": "report.pdf",
+            "mimeType": "application/pdf",
+            "size": 5,
+            "content": "https://example.invalid/attachment/10001",
+            "created": "2026-11-02T08:00:00.000+0000",
+            "author": {"displayName": "Test User", "emailAddress": "test.user@example.invalid"},
+            "thumbnail": "https://example.invalid/thumb/10001"
+        });
+        assert_eq!(
+            slim_attachment(full.as_object().unwrap()),
+            json!({
+                "id": "10001",
+                "filename": "report.pdf",
+                "mimeType": "application/pdf",
+                "size": 5,
+                "content": "https://example.invalid/attachment/10001",
+                "created": "2026-11-02T08:00:00.000+0000",
+                "author": {"displayName": "Test User", "emailAddress": "test.user@example.invalid"}
+            })
+        );
+        let bare = json!({"filename": "a.png", "author": null});
+        assert_eq!(
+            slim_attachment(bare.as_object().unwrap()),
+            json!({
+                "id": null,
+                "filename": "a.png",
+                "mimeType": null,
+                "size": null,
+                "content": null,
+                "created": null,
+                "author": null
+            })
+        );
+    }
 }

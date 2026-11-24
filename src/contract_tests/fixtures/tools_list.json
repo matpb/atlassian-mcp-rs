@@ -1,0 +1,2390 @@
+[
+  {
+    "description": "Approve a pull request as the authenticated user.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_approve_pull_request"
+  },
+  {
+    "description": "Create a pipeline variable at repository level (omit `environment`) or for one deployment environment (name, slug or UUID). `secured` makes it write-only. Needs an API token with the admin:pipeline:bitbucket scope; a read-only token gets 403 `required privilege scopes`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "environment": {
+          "default": null,
+          "description": "Deployment environment name, slug or UUID. Omit for a repository-level variable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "secured": {
+          "default": false,
+          "description": "Secured variables are write-only: Bitbucket never returns the value again.",
+          "type": "boolean"
+        },
+        "value": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_create_pipeline_variable"
+  },
+  {
+    "description": "Open a pull request from `source_branch` into `destination_branch` in the same repository. Optionally add `reviewers` (list of Bitbucket account UUIDs).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "close_source_branch": {
+          "default": false,
+          "type": "boolean"
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_branch": {
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "reviewers": {
+          "default": null,
+          "description": "Optional list of Bitbucket account UUIDs to add as reviewers.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "source_branch": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "title",
+        "source_branch",
+        "destination_branch"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_create_pull_request"
+  },
+  {
+    "description": "Add a PR comment. Use `parent_comment_id` to reply, or `inline_path` + `inline_to` for an inline comment.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "content": {
+          "description": "Comment body in markdown (stored as `content.raw`)",
+          "type": "string"
+        },
+        "inline_path": {
+          "default": null,
+          "description": "File path for an inline comment (requires `inline_to`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inline_to": {
+          "default": null,
+          "description": "End line for inline comment (requires `inline_path`)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "parent_comment_id": {
+          "default": null,
+          "description": "When set, this comment is a reply to an existing top-level comment",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_create_pull_request_comment"
+  },
+  {
+    "description": "Decline (reject) a pull request. Optional `message`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "message": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_decline_pull_request"
+  },
+  {
+    "description": "Delete a pipeline variable, addressed by key name or UUID, at repository level (omit `environment`) or in one deployment environment. Irreversible; a secured value cannot be recovered afterwards. Needs the admin:pipeline:bitbucket scope.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "environment": {
+          "default": null,
+          "description": "Deployment environment name, slug or UUID. Omit for a repository-level variable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "variable": {
+          "description": "Existing variable, by key name or UUID including braces.",
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "variable"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_delete_pipeline_variable"
+  },
+  {
+    "description": "Delete a pull request comment (requires permission).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "comment_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id",
+        "comment_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_delete_pull_request_comment"
+  },
+  {
+    "description": "Commits that touched a file (GET .../filehistory/{commit}/{path}), Bitbucket JSON unchanged: values[].commit.hash, next. `page` is the opaque cursor from the `next` link's page= value, passed verbatim.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "commit": {
+          "description": "Commit hash, tag or branch",
+          "type": "string"
+        },
+        "page": {
+          "default": null,
+          "description": "Opaque cursor: the `page` value of Bitbucket's `next` link, passed verbatim (string or number)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "File path inside the repository, e.g. `app/Info.plist`",
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "commit",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_file_history"
+  },
+  {
+    "description": "Get a single commit by hash (`GET .../commit/{commit}`).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "commit"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_commit"
+  },
+  {
+    "description": "Raw file content at a commit, tag or branch (GET .../src/{commit}/{path}), returned as plain text. A missing file fails with `Bitbucket returned 404 Not Found: ...`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "commit": {
+          "description": "Commit hash, tag or branch",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path inside the repository, e.g. `app/Info.plist`",
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "commit",
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_file"
+  },
+  {
+    "description": "Get one pipeline run by build number or UUID. A run is finished when `state` is COMPLETED; `result` then says SUCCESSFUL, FAILED, STOPPED or ERROR. While running, `stage` shows RUNNING/PAUSED/HALTED. A pipeline with a manual step (e.g. a production deploy) sits at IN_PROGRESS/PAUSED indefinitely after its automatic steps finish, so when monitoring a deploy check `bitbucket_list_pipeline_steps` or `bitbucket_list_deployments` rather than waiting for COMPLETED.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pipeline": {
+          "description": "Pipeline build number (e.g. `142`) or UUID including braces (e.g. `{a1b2c3d4-...}`).",
+          "type": "string"
+        },
+        "raw": {
+          "default": false,
+          "description": "Return Bitbucket's full object instead of the compact summary.",
+          "type": "boolean"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pipeline"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pipeline"
+  },
+  {
+    "description": "Fetch the console log of one pipeline step (GET .../steps/{step_uuid}/log). Returns the LAST `tail_chars` characters (default 20000) plus `total_chars` and `truncated_head`, so a failed step's error is usually in the first call. Logs of steps still running may be partial or 404 until the step starts.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pipeline": {
+          "description": "Pipeline build number or UUID including braces.",
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "step_uuid": {
+          "description": "Step UUID including braces, from `bitbucket_list_pipeline_steps`.",
+          "type": "string"
+        },
+        "tail_chars": {
+          "default": null,
+          "description": "Keep only the last N characters of the log (default 20000). The response reports the total size and whether the head was cut.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pipeline",
+        "step_uuid"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pipeline_step_log"
+  },
+  {
+    "description": "Get a single pull request by id.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pull_request"
+  },
+  {
+    "description": "Fetch one pull request comment by id.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "comment_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id",
+        "comment_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pull_request_comment"
+  },
+  {
+    "description": "Raw unified diff for a pull request (text). Returned JSON: { \"diff\": \"...\" }.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pull_request_diff"
+  },
+  {
+    "description": "Per-file diff statistics for a pull request (JSON from Bitbucket `diffstat` endpoint).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_pull_request_diffstat"
+  },
+  {
+    "description": "Get repository metadata (Bitbucket Cloud REST 2.0 GET .../repositories/{workspace}/{repo_slug}).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_get_repository"
+  },
+  {
+    "description": "List branches in a repository (`refs/branches`). Optional `name_filter` uses Bitbucket query `name~\"...\"`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "name_filter": {
+          "default": null,
+          "description": "Substring matched with Bitbucket `q=name~\\\"...\\\"`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_branches"
+  },
+  {
+    "description": "List commits. `revision` (branch, tag or commit; default HEAD) or `include`/`exclude` (commits reachable from include and not from exclude, each a string or list). Bitbucket JSON unchanged (values, next); for later pages pass `page` and, if present in the `next` link, `ctx`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "ctx": {
+          "default": null,
+          "description": "`ctx` value from the `next` link, passed for later pages",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exclude": {
+          "default": [],
+          "description": "Commits not reachable from these refs: one string or a list of strings",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "default": [],
+          "description": "Commits reachable from these refs: one string or a list of strings",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "revision": {
+          "default": null,
+          "description": "Branch name, tag, or commit; default `HEAD`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_commits"
+  },
+  {
+    "description": "List a repository's deployment environments (uuid, name, slug, type Test/Staging/Production, rank). The `environment` argument of the pipeline-variable tools accepts any of name, slug or uuid.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "raw": {
+          "default": false,
+          "description": "Return Bitbucket's full environment objects instead of the compact summary.",
+          "type": "boolean"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_deployment_environments"
+  },
+  {
+    "description": "List deployments for a repository, newest first: environment, state (COMPLETED/IN_PROGRESS/UNDEPLOYED), status (SUCCESSFUL/FAILED/STOPPED), the pipeline build_number and commit that produced it, and timing. Set `raw` for the full payload.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "environment": {
+          "default": null,
+          "description": "Environment UUID, as listed by `bitbucket_list_deployment_environments`, braces included",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "raw": {
+          "default": false,
+          "description": "Return Bitbucket's full deployment objects instead of the compact summary.",
+          "type": "boolean"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "sort": {
+          "default": null,
+          "description": "Bitbucket sort; default `-state.started_on`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_deployments"
+  },
+  {
+    "description": "List the steps of a pipeline run with per-step state, result, deployment environment, timing and the step UUID needed by `bitbucket_get_pipeline_step_log`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pipeline": {
+          "description": "Pipeline build number (e.g. `142`) or UUID including braces (e.g. `{a1b2c3d4-...}`).",
+          "type": "string"
+        },
+        "raw": {
+          "default": false,
+          "description": "Return Bitbucket's full object instead of the compact summary.",
+          "type": "boolean"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pipeline"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pipeline_steps"
+  },
+  {
+    "description": "List pipeline variables. Omit `environment` for repository-level variables (GET .../pipelines_config/variables); pass an environment name, slug or UUID for that deployment's variables (GET .../deployments_config/environments/{uuid}/variables). Deployment-level values override repository-level ones with the same key. Secured variables come back without a value.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "environment": {
+          "default": null,
+          "description": "Deployment environment name, slug or UUID. Omit for repository-level variables.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pipeline_variables"
+  },
+  {
+    "description": "List pipeline runs for a repository, newest first (GET .../pipelines?sort=-created_on). Compact per-run summary: build_number, uuid, state (PENDING/IN_PROGRESS/COMPLETED), result (SUCCESSFUL/FAILED/STOPPED/ERROR), target ref, commit, trigger, creator, timing and the web URL. Optional `target_branch` filters the fetched page. Set `raw` for the full Bitbucket payload. Poll `bitbucket_get_pipeline` to watch one run finish.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "description": "Page size (1 to 100, default 10). Newest first.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "raw": {
+          "default": false,
+          "description": "Return Bitbucket's full pipeline objects instead of the compact summary.",
+          "type": "boolean"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "target_branch": {
+          "default": null,
+          "description": "Keep only pipelines whose target branch/tag equals this name. Filters the fetched page, so raise `pagelen` if the branch is quiet.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pipelines"
+  },
+  {
+    "description": "Activity stream for a pull request (approvals, comments, updates, etc.).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pull_request_activity"
+  },
+  {
+    "description": "List comments on a pull request (paginated; use `next` in the response to fetch more).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pull_request_comments"
+  },
+  {
+    "description": "List pull requests for a repository. Optional `state`: OPEN, MERGED, DECLINED, SUPERSEDED.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "sort": {
+          "default": null,
+          "description": "Bitbucket sort, e.g. `-updated_on`. Omit for Bitbucket's default order.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "default": null,
+          "description": "OPEN, MERGED, DECLINED, SUPERSEDED; omit for all active states per API defaults",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_pull_requests"
+  },
+  {
+    "description": "List repositories in a Bitbucket workspace (Cloud REST 2.0). Requires X-Bitbucket-Workspace, X-Bitbucket-Username, X-Bitbucket-Api-Token (legacy alias: X-Bitbucket-App-Password); optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0). Optional `workspace` overrides the header.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "role": {
+          "default": null,
+          "description": "Bitbucket role filter, e.g. `member`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "description": "When set, use this workspace instead of `X-Bitbucket-Workspace`",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "bitbucket_list_repositories"
+  },
+  {
+    "description": "List tags (GET .../refs/tags). Returns Bitbucket's JSON unchanged: values[].name, values[].target.hash, values[].target.date, next. Optional `sort` (e.g. -target.date) and `q` filter.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "q": {
+          "default": null,
+          "description": "Bitbucket filter expression (`q`), e.g. `name ~ \"3.\"`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "sort": {
+          "default": null,
+          "description": "Bitbucket sort, e.g. `-target.date`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_list_tags"
+  },
+  {
+    "description": "Merge an open pull request. Optional `merge_strategy`: merge_commit, squash, fast_forward; optional `close_source_branch`, `message`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "close_source_branch": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "merge_strategy": {
+          "default": null,
+          "description": "merge_commit, squash, or fast_forward",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_merge_pull_request"
+  },
+  {
+    "description": "Reply to an existing pull request comment (sets `parent` to `parent_comment_id`).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "parent_comment_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id",
+        "parent_comment_id",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_reply_pull_request_comment"
+  },
+  {
+    "description": "Search workspace members by display name or nickname. Returns user UUIDs, display names, and nicknames. Use this to look up reviewer UUIDs before adding them to a pull request.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "default": null,
+          "description": "Search term matched against display name and nickname.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "bitbucket_search_users"
+  },
+  {
+    "description": "Stop a running pipeline (POST .../pipelines/{pipeline}/stopPipeline). Bitbucket rejects the call once the run has completed.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "pipeline": {
+          "description": "Pipeline build number or UUID including braces.",
+          "type": "string"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pipeline"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_stop_pipeline"
+  },
+  {
+    "description": "Start a pipeline (POST .../pipelines). `ref_name` is the branch (or tag, with `ref_type` = `tag`); optional `commit_hash` pins the run to a commit on that ref; optional `custom_pipeline` names a `custom:` pipeline from bitbucket-pipelines.yml; optional `variables` are passed to it. Returns the new run's summary (build_number, uuid) for polling with `bitbucket_get_pipeline`. This runs real CI/CD, including deployments, so confirm the ref and pipeline name first.",
+    "inputSchema": {
+      "$defs": {
+        "PipelineVariable": {
+          "description": "Variable passed to a triggered pipeline (`variables` in POST .../pipelines).",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "secured": {
+              "default": false,
+              "type": "boolean"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "value"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "commit_hash": {
+          "default": null,
+          "description": "Pin the run to a specific commit hash on that ref instead of its current head.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "custom_pipeline": {
+          "default": null,
+          "description": "Name of a `custom:` pipeline from bitbucket-pipelines.yml. Omit to run the ref's default pipeline.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ref_name": {
+          "description": "Branch or tag name to run the pipeline on, e.g. `master`.",
+          "type": "string"
+        },
+        "ref_type": {
+          "default": null,
+          "description": "`branch` (default) or `tag`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "variables": {
+          "default": null,
+          "description": "Variables for the run: `[{\"key\": \"X\", \"value\": \"y\", \"secured\": false}]`. Only variables declared on a custom pipeline are honoured.",
+          "items": {
+            "$ref": "#/$defs/PipelineVariable"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "ref_name"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_trigger_pipeline"
+  },
+  {
+    "description": "Withdraw your approval on a pull request.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pagelen": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_unapprove_pull_request"
+  },
+  {
+    "description": "Update an existing pipeline variable, addressed by key name or UUID, at repository level (omit `environment`) or in one deployment environment. Read-modify-write: fields you omit are carried over from the current variable. A secured variable's value cannot be read back, so `value` is required to update one. Needs the admin:pipeline:bitbucket scope.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "environment": {
+          "default": null,
+          "description": "Deployment environment name, slug or UUID. Omit for a repository-level variable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "default": null,
+          "description": "New key name. Omit to keep.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "secured": {
+          "default": null,
+          "description": "Change the secured flag. Omit to keep.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "value": {
+          "default": null,
+          "description": "New value. Required when the variable is secured, since its current value cannot be read back.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "variable": {
+          "description": "Existing variable, by key name or UUID including braces.",
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "variable"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_update_pipeline_variable"
+  },
+  {
+    "description": "Edit a pull request's `description` and/or `title`. NOT a patch: Bitbucket's update endpoint REPLACES the fields it receives and resets the ones it doesn't, so this tool GETs the PR first and re-sends its current title, description, reviewers, destination branch and close_source_branch for whatever you omit. Consequences: (1) `description` REPLACES the whole existing body, it is not appended to, so read the PR with `bitbucket_get_pull_request` first if you mean to keep any of the old text; (2) an empty-string `description` clears the body; (3) omitting a field leaves it as-is, but because the carried-over values are read moments before the write, a concurrent edit in the Bitbucket UI can be overwritten.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "description": {
+          "default": null,
+          "description": "Full replacement PR description in markdown; it overwrites the existing body\nrather than appending to it. Empty string clears the body, omit to keep it as-is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "Full replacement PR title. Omit to leave the title unchanged.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_update_pull_request"
+  },
+  {
+    "description": "Edit a pull request comment body (`content.raw`). Use this to apply revised text or fixups.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "comment_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "content": {
+          "type": "string"
+        },
+        "pull_request_id": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repo_slug": {
+          "type": "string"
+        },
+        "workspace": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_slug",
+        "pull_request_id",
+        "comment_id",
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "bitbucket_update_pull_request_comment"
+  },
+  {
+    "description": "Create a new Confluence page via the v2 API. Body can be Confluence storage format (XHTML) or wiki markup. Returns the created page's id, title, status, and webui link.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "body": {
+          "description": "Page body content (XHTML for \"storage\" format, or wiki markup for \"wiki\" format)",
+          "type": "string"
+        },
+        "body_format": {
+          "default": "storage",
+          "description": "Body format: \"storage\" (Confluence XHTML, default) or \"wiki\" (wiki markup)",
+          "type": "string"
+        },
+        "parent_id": {
+          "default": null,
+          "description": "Parent page ID (numeric string); omit to create a top-level page in the space",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "space_id": {
+          "description": "Confluence space ID (numeric string) or space key (e.g. \"DOCS\")",
+          "type": "string"
+        },
+        "status": {
+          "default": "current",
+          "description": "Page status: \"current\" (default) or \"draft\"",
+          "type": "string"
+        },
+        "title": {
+          "description": "Page title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "space_id",
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "name": "confluence_create_page"
+  },
+  {
+    "description": "Fetch a Confluence page by content ID. Returns a trimmed JSON view: id, title, status, space (key/name), version, lastUpdated, body.storage (truncated if very long), and webui/tinyui links only.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "page_id": {
+          "description": "Confluence content ID (numeric string)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id"
+      ],
+      "type": "object"
+    },
+    "name": "confluence_get_page"
+  },
+  {
+    "description": "Search Confluence content using CQL (Confluence Query Language). Returns id, title, type, excerpt, and web UI path hints.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cql": {
+          "description": "Confluence Query Language string, e.g. `type=page and space=TEAM`",
+          "type": "string"
+        },
+        "limit": {
+          "default": 25,
+          "description": "Max hits (1 to 100, default 25)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cql"
+      ],
+      "type": "object"
+    },
+    "name": "confluence_search"
+  },
+  {
+    "description": "Upload a small file attachment to a Jira issue, content as a base64-encoded string. For anything beyond a few hundred KB use jira_get_attachment_upload_url and send the raw bytes with curl instead. Returns the created attachment metadata.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "file_base64": {
+          "description": "File content as a **base64-encoded** string",
+          "type": "string"
+        },
+        "filename": {
+          "description": "File name including extension, e.g. `report.pdf`",
+          "type": "string"
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key",
+        "filename",
+        "file_base64"
+      ],
+      "type": "object"
+    },
+    "name": "jira_add_attachment"
+  },
+  {
+    "description": "Add a comment on a Jira issue. Jira stores the body as Atlassian Document Format (ADF). Use content_format=plain (default) for simple text (line breaks become paragraphs). Use content_format=adf and pass a JSON **string** of a full ADF document {\"type\":\"doc\",\"version\":1,\"content\":[...]} for headings, bullet/ordered lists, links, code blocks, mentions, etc. Prefer ADF over plain text for better structure, formatting, and @mention support. See Atlassian Jira ADF structure docs.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "comment": {
+          "description": "Comment body: plain text if `content_format` is `plain`, or a **JSON string** of a full ADF document `{\"type\":\"doc\",\"version\":1,\"content\":[...]}` if `content_format` is `adf`",
+          "type": "string"
+        },
+        "content_format": {
+          "default": "plain",
+          "description": "`plain` (default): each line becomes a paragraph. `adf`: `comment` must be valid ADF document JSON (headings, lists, links, code blocks, etc.).",
+          "type": "string"
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key",
+        "comment"
+      ],
+      "type": "object"
+    },
+    "name": "jira_add_comment"
+  },
+  {
+    "description": "List a Jira Agile board's issues, split by scope: \"board\" (default, issues on the board's columns), \"backlog\" (issues in the board's backlog), or \"all\" (board + backlog combined). On a team-managed board, backlog membership has NO JQL equivalent -- `/board/{id}/issue` returns backlog issues too, so scope=\"board\" is computed as the set difference of that endpoint's keys minus `/board/{id}/backlog`'s keys. include_done=false (default) adds `statusCategory != Done` to the JQL. start_at/max_results paginate the FINAL list, after scope filtering.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board_id": {
+          "description": "Jira Agile board ID, from `jira_list_boards`",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "include_done": {
+          "default": null,
+          "description": "Include issues whose status category is Done (default false)",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jql": {
+          "default": null,
+          "description": "Extra JQL filter, ANDed with the done-status filter",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_results": {
+          "default": null,
+          "description": "Maximum issues to return (1-100, default 100)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "scope": {
+          "default": null,
+          "description": "`\"board\"` (on the board, default), `\"backlog\"` (backlog only), or `\"all\"` (board + backlog combined)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_at": {
+          "default": null,
+          "description": "Pagination offset into the final result list (default 0)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "board_id"
+      ],
+      "type": "object"
+    },
+    "name": "jira_board_issues"
+  },
+  {
+    "description": "Create a Jira issue (POST /rest/api/3/issue): project_key, issue_type name (e.g. Task), summary, and optional description. Optional description uses description_content_format plain (default) or adf (JSON string of full ADF document). Same ADF rules as jira_add_comment. Prefer ADF over plain text for better structure and formatting.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "description": {
+          "default": null,
+          "description": "Optional description; interpreted per `description_content_format`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_content_format": {
+          "default": "plain",
+          "description": "When `description` is set: `plain` (default) or `adf` (JSON string of full ADF document)",
+          "type": "string"
+        },
+        "issue_type": {
+          "description": "Issue type **name** as shown in Jira (e.g. `Task`, `Bug`, `Story`)",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "Project key, e.g. `PROJ`",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Issue summary (title)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "issue_type",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "name": "jira_create_issue"
+  },
+  {
+    "description": "Delete an attachment from Jira by its attachment ID. Use jira_list_attachments or jira_get_issue to find attachment IDs.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "attachment_id": {
+          "description": "Jira attachment ID (numeric string), as returned by `jira_list_attachments` or `jira_get_issue`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attachment_id"
+      ],
+      "type": "object"
+    },
+    "name": "jira_delete_attachment"
+  },
+  {
+    "description": "Get a one-shot, short-lived URL to upload a LOCAL file as a Jira attachment without base64. Then run the returned `curl` command (raw bytes, PUT, no auth headers needed): the server forwards the bytes straight to Jira using the credentials of this call and stores nothing. Each URL works exactly once. Returns `upload_url`, `curl`, `expires_in_seconds`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "filename": {
+          "description": "File name including extension, e.g. `report.zip`",
+          "type": "string"
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "description": "Seconds the upload URL stays valid. Default 600, max 3600.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "issue_key",
+        "filename"
+      ],
+      "type": "object"
+    },
+    "name": "jira_get_attachment_upload_url"
+  },
+  {
+    "description": "Fetch a Jira issue for an LLM: key, summary, description and comments. By default description/comments are **lossy plain text** extracted from Atlassian Document Format (ADF). Set include_adf=true to also get description_adf and per-comment body_adf (raw ADF JSON) so you can edit rich content without losing structure. Requires X-Atlassian-Site-Url, X-Atlassian-Email, and X-Atlassian-Api-Token on every MCP HTTP request.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "include_adf": {
+          "default": false,
+          "description": "When true, include `description_adf` and each comment's `body_adf` (raw Atlassian Document Format JSON) for lossless round-trips. Default false returns only plain-text `description` and `body`.",
+          "type": "boolean"
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key"
+      ],
+      "type": "object"
+    },
+    "name": "jira_get_issue"
+  },
+  {
+    "description": "Fetch a Jira issue's change history (changelog): who changed what field, from what value to what, and when. Optional `field` narrows it to one field, e.g. `status` to get the full workflow timeline or `assignee` to see reassignments. Timestamps are returned verbatim from Jira, including its UTC offset. Use this rather than JQL when you need to prove who transitioned an issue and when.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "field": {
+          "default": null,
+          "description": "Only return changes to this field, e.g. `status`, `assignee`, `Sprint`. Omit for every field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 50,
+          "description": "Maximum change entries to return (1 to 100, default 50)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_at": {
+          "default": 0,
+          "description": "Pagination offset into the changelog (default 0, oldest first)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "issue_key"
+      ],
+      "type": "object"
+    },
+    "name": "jira_get_issue_history"
+  },
+  {
+    "description": "List available transitions for a Jira issue. Returns transition IDs and target status names. Use the transition ID with `jira_transition_issue` to move an issue to a new status.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key"
+      ],
+      "type": "object"
+    },
+    "name": "jira_get_transitions"
+  },
+  {
+    "description": "List all attachments on a Jira issue. Returns attachment id, filename, mimeType, size, download URL, created date, and author.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key"
+      ],
+      "type": "object"
+    },
+    "name": "jira_list_attachments"
+  },
+  {
+    "description": "List Jira Agile boards (GET /rest/agile/1.0/board), optionally filtered to one project. Use the returned board `id` with jira_board_issues, jira_move_to_board and jira_move_to_backlog.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "max_results": {
+          "default": null,
+          "description": "Maximum boards to return (1-50, default 50)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "project_key": {
+          "default": null,
+          "description": "Restrict to boards for this project key, e.g. `PROJ`. Omit for all boards.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_at": {
+          "default": null,
+          "description": "Pagination offset (default 0)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "jira_list_boards"
+  },
+  {
+    "description": "Move issues from a board onto its backlog (POST /rest/agile/1.0/backlog/{id}/issue, the board-scoped form -- the boardless /backlog/issue endpoint is scrum-only). Does NOT change issue status -- only backlog/board membership. Up to 50 issue keys per call (Jira's cap).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board_id": {
+          "description": "Jira Agile board ID",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issue_keys": {
+          "description": "Issue keys to move, e.g. `[\"PROJ-1\",\"PROJ-2\"]`. 1-50 keys per call (Jira's cap).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "board_id",
+        "issue_keys"
+      ],
+      "type": "object"
+    },
+    "name": "jira_move_to_backlog"
+  },
+  {
+    "description": "Move issues from a board's backlog onto the board (POST /rest/agile/1.0/board/{id}/issue). Does NOT change issue status -- only backlog/board membership. Up to 50 issue keys per call (Jira's cap).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "board_id": {
+          "description": "Jira Agile board ID",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "issue_keys": {
+          "description": "Issue keys to move, e.g. `[\"PROJ-1\",\"PROJ-2\"]`. 1-50 keys per call (Jira's cap).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "board_id",
+        "issue_keys"
+      ],
+      "type": "object"
+    },
+    "name": "jira_move_to_board"
+  },
+  {
+    "description": "Search Jira issues using JQL via POST /rest/api/3/search/jql. Returns trimmed issues plus isLast and nextPageToken for cursor pagination (offset start_at is applied by fetching pages until enough issues are skipped). Optional `fields` (list of Jira field names) returns Jira's untouched issues (key + fields map); optional `next_page_token` continues from a previous response. Either one switches to single-page cursor mode (no start_at).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "fields": {
+          "default": null,
+          "description": "Jira field names to return untouched, e.g. `[\"summary\", \"labels\"]`. Switches to single-page cursor mode.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "jql": {
+          "description": "Jira Query Language string",
+          "type": "string"
+        },
+        "max_results": {
+          "default": 25,
+          "description": "Maximum issues to return (1 to 100, default 25)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "next_page_token": {
+          "default": null,
+          "description": "`nextPageToken` from a previous response. Switches to single-page cursor mode.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_at": {
+          "default": 0,
+          "description": "Pagination offset (default 0)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "jql"
+      ],
+      "type": "object"
+    },
+    "name": "jira_search"
+  },
+  {
+    "description": "Search for Jira users by name or email. Returns accountId (needed for ADF @mentions), displayName, emailAddress, and active status. Use accountId in ADF mention nodes: {\"type\":\"mention\",\"attrs\":{\"id\":\"<accountId>\",\"text\":\"@DisplayName\"}}.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "max_results": {
+          "default": 10,
+          "description": "Maximum users to return (1 to 50, default 10)",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "description": "Search term matched against user display name and email address",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "jira_search_users"
+  },
+  {
+    "description": "Set the assignee for a Jira issue via PUT /rest/api/3/issue/{key}/assignee. Pass the assignee's Atlassian accountId (look up with `jira_search_users`). Pass `\"-1\"` to use the project's default assignee. Omit `account_id` (or pass null) to unassign the issue.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "account_id": {
+          "default": null,
+          "description": "Atlassian accountId of the user to assign. Obtain from `jira_search_users`.\nPass `\"-1\"` to use the project's default assignee.\nOmit or pass `null` to unassign the issue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key"
+      ],
+      "type": "object"
+    },
+    "name": "jira_set_assignee"
+  },
+  {
+    "description": "Transition a Jira issue to a new status. Requires a transition_id obtained from `jira_get_transitions`. This changes the issue's workflow status (e.g. To Do → In Progress → Done).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        },
+        "transition_id": {
+          "description": "Transition ID (get available IDs from `jira_get_transitions`)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key",
+        "transition_id"
+      ],
+      "type": "object"
+    },
+    "name": "jira_transition_issue"
+  },
+  {
+    "description": "Replace the Jira issue description. Same content_format semantics as jira_add_comment: plain (default) wraps text as ADF paragraphs; adf accepts a JSON string of a full ADF document for rich formatting compatible with Jira Cloud REST API v3. Prefer ADF over plain text for better structure and formatting.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "content_format": {
+          "default": "plain",
+          "description": "`plain` (default) or `adf` (full Atlassian Document Format JSON string)",
+          "type": "string"
+        },
+        "description": {
+          "description": "New description: plain text if `content_format` is `plain`, or ADF document JSON string if `content_format` is `adf`",
+          "type": "string"
+        },
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key",
+        "description"
+      ],
+      "type": "object"
+    },
+    "name": "jira_update_description"
+  },
+  {
+    "description": "Replace a Jira issue's summary (title) via PUT /rest/api/3/issue/{key}. Plain text, one line; surrounding whitespace is trimmed.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "issue_key": {
+          "description": "Jira issue key, e.g. `PROJ-123`",
+          "type": "string"
+        },
+        "summary": {
+          "description": "New summary (title), plain text on one line",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issue_key",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "name": "jira_update_summary"
+  }
+]

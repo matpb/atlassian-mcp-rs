@@ -1934,4 +1934,104 @@ mod tests {
             "https://api.bitbucket.org/2.0/repositories/ws/r/deployments?sort=-state.started_on&environment=%7Babc%7D&pagelen=5"
         );
     }
+
+    #[test]
+    fn summarize_step_keeps_contract_fields_and_maps_max_time() {
+        let step = json!({
+            "uuid": "{step-1}",
+            "name": "Build",
+            "state": {"name": "COMPLETED", "stage": {"name": "ENDED"}, "result": {"name": "SUCCESSFUL"}},
+            "deployment_environment": {"name": "Production"},
+            "trigger": {"type": "pipeline_step_trigger_manual"},
+            "started_on": "2026-11-01T10:00:00Z",
+            "completed_on": "2026-11-01T10:01:00Z",
+            "duration_in_seconds": 60,
+            "run_number": 2,
+            "maxTime": 120,
+            "image": {"name": "noise-image"},
+            "script_commands": ["noise"]
+        });
+        assert_eq!(
+            summarize_step(&step),
+            json!({
+                "uuid": "{step-1}",
+                "name": "Build",
+                "state": "COMPLETED",
+                "stage": "ENDED",
+                "result": "SUCCESSFUL",
+                "deployment_environment": "Production",
+                "trigger": "pipeline_step_trigger_manual",
+                "started_on": "2026-11-01T10:00:00Z",
+                "completed_on": "2026-11-01T10:01:00Z",
+                "duration_in_seconds": 60,
+                "run_number": 2,
+                "max_time": 120
+            })
+        );
+        assert_eq!(
+            summarize_step(&json!({})),
+            json!({
+                "uuid": null,
+                "name": null,
+                "state": null,
+                "stage": null,
+                "result": null,
+                "deployment_environment": null,
+                "trigger": null,
+                "started_on": null,
+                "completed_on": null,
+                "duration_in_seconds": null,
+                "run_number": null,
+                "max_time": null
+            })
+        );
+    }
+
+    #[test]
+    fn summarize_variable_passes_secured_value_through() {
+        // Pins current behaviour: a secured variable's `value` is copied, not masked or omitted.
+        let secured = json!({
+            "uuid": "{var-2}",
+            "key": "TOKEN",
+            "value": "stub-secret",
+            "secured": true,
+            "links": {"self": {"href": "x"}}
+        });
+        assert_eq!(
+            summarize_variable(&secured),
+            json!({
+                "uuid": "{var-2}",
+                "key": "TOKEN",
+                "value": "stub-secret",
+                "secured": true,
+                "scope": null
+            })
+        );
+        let plain = json!({"uuid": "{var-1}", "key": "LOG", "value": "info", "secured": false, "scope": "repository"});
+        assert_eq!(
+            summarize_variable(&plain),
+            json!({"uuid": "{var-1}", "key": "LOG", "value": "info", "secured": false, "scope": "repository"})
+        );
+        assert_eq!(
+            summarize_variable(&json!({})),
+            json!({"uuid": null, "key": null, "value": null, "secured": null, "scope": null})
+        );
+    }
+
+    #[test]
+    fn require_non_empty_trims_and_names_the_field() {
+        assert_eq!(
+            require_non_empty("  r \t", "repo_slug"),
+            Ok("r".to_string())
+        );
+        assert_eq!(require_non_empty("a b", "title"), Ok("a b".to_string()));
+        assert_eq!(
+            require_non_empty("", "repo_slug"),
+            Err("repo_slug must not be empty".to_string())
+        );
+        assert_eq!(
+            require_non_empty(" \t\n", "ref_name"),
+            Err("ref_name must not be empty".to_string())
+        );
+    }
 }
