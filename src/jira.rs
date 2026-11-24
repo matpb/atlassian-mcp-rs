@@ -256,7 +256,7 @@ impl JiraClient {
             check_cursor_start_at(start_at)?;
             let body = search_jql_cursor_body(jql, max, fields, next_page_token)?;
             let raw = self
-                .post_json_strict_auth(&url, &body)
+                .post_json(&url, &body)
                 .await
                 .map_err(|e| format!("Jira search/jql failed: {e}"))?;
             return Ok(shape_cursor_response(&raw, max, fields.is_some()));
@@ -273,9 +273,14 @@ impl JiraClient {
 
         while collected.len() < max as usize && pages < MAX_PAGES {
             pages += 1;
+            // Skipped issues count toward start_at, so ask for the rest of the window only.
+            let page_max = start_at
+                .saturating_add(max)
+                .saturating_sub(global_index)
+                .clamp(1, PAGE_SIZE);
             let mut body = serde_json::Map::new();
             body.insert("jql".into(), json!(jql));
-            body.insert("maxResults".into(), json!(PAGE_SIZE.min(100)));
+            body.insert("maxResults".into(), json!(page_max));
             body.insert(
                 "fields".into(),
                 json!(vec![
@@ -470,6 +475,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
@@ -579,6 +585,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira attachment upload failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
@@ -626,6 +633,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         if !status.is_success() {
@@ -853,6 +861,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
@@ -881,6 +890,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
@@ -897,20 +907,6 @@ impl JiraClient {
     }
 
     async fn post_json(&self, url: &str, payload: &Value) -> Result<Value, String> {
-        self.post_json_inner(url, payload, false).await
-    }
-
-    /// Like `post_json`, but a 200 that Jira served anonymously after a failed login becomes an error.
-    async fn post_json_strict_auth(&self, url: &str, payload: &Value) -> Result<Value, String> {
-        self.post_json_inner(url, payload, true).await
-    }
-
-    async fn post_json_inner(
-        &self,
-        url: &str,
-        payload: &Value,
-        strict_auth: bool,
-    ) -> Result<Value, String> {
         let response = self
             .http
             .post(url)
@@ -921,13 +917,9 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
-        let login_reason = response
-            .headers()
-            .get("X-Seraph-LoginReason")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
         let bytes = response
             .bytes()
             .await
@@ -936,9 +928,6 @@ impl JiraClient {
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
             return Err(format!("Jira returned {status}: {msg}"));
-        }
-        if strict_auth && let Some(err) = login_failure(login_reason.as_deref()) {
-            return Err(err);
         }
 
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
@@ -955,6 +944,7 @@ impl JiraClient {
             .send()
             .await
             .map_err(|e| format!("Jira request failed: {e}"))?;
+        check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
@@ -1035,7 +1025,7 @@ fn search_jql_cursor_body(
     Ok(body)
 }
 
-/// Jira answers bad credentials with 200 as anonymous and sets `X-Seraph-LoginReason`.
+/// Jira answers bad credentials with 200, 401 or 404 and sets `X-Seraph-LoginReason`.
 fn login_failure(reason: Option<&str>) -> Option<String> {
     match reason {
         Some(r) if r.contains("AUTHENTICATED_FAILED") || r.contains("AUTHENTICATION_DENIED") => {
@@ -1044,6 +1034,17 @@ fn login_failure(reason: Option<&str>) -> Option<String> {
             ))
         }
         _ => None,
+    }
+}
+
+/// Runs before the status check, so a failed login is never reported as a missing issue.
+fn check_login(headers: &reqwest::header::HeaderMap) -> Result<(), String> {
+    let reason = headers
+        .get("X-Seraph-LoginReason")
+        .and_then(|v| v.to_str().ok());
+    match login_failure(reason) {
+        Some(err) => Err(err),
+        None => Ok(()),
     }
 }
 
@@ -1212,7 +1213,10 @@ fn adf_walk_adf(node: &Value, out: &mut String) {
                 .and_then(|a| a.get("text"))
                 .and_then(|x| x.as_str())
             {
-                out.push('@');
+                // Jira's mention text usually starts with `@` already.
+                if !t.starts_with('@') {
+                    out.push('@');
+                }
                 out.push_str(t);
             } else {
                 out.push_str("@mention");
@@ -1391,6 +1395,19 @@ mod tests {
         let adf = plain_text_to_adf("one\ntwo");
         let plain = adf_to_plain(&adf).expect("plain text");
         assert_eq!(plain, "one\ntwo");
+    }
+
+    #[test]
+    fn adf_mention_is_not_double_prefixed() {
+        let mention_doc = |attrs: Value| {
+            json!({"type": "doc", "version": 1, "content": [
+                {"type": "paragraph", "content": [{"type": "mention", "attrs": attrs}]}
+            ]})
+        };
+        let plain = |attrs: Value| adf_to_plain(&mention_doc(attrs)).expect("plain text");
+        assert_eq!(plain(json!({"text": "@Test User"})), "@Test User");
+        assert_eq!(plain(json!({"text": "Test User"})), "@Test User");
+        assert_eq!(plain(json!({"id": "acc-1"})), "@mention");
     }
 
     #[test]

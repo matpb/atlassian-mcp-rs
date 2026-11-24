@@ -101,6 +101,37 @@ async fn confluence_search_sends_cql_and_default_limit_and_slims_hits() {
 }
 
 #[tokio::test]
+async fn confluence_search_numeric_id_and_blank_body() {
+    let mcp = Mcp::start().await;
+    mcp.fake.on(
+        "GET",
+        "/wiki/rest/api/search",
+        200,
+        json!({"results": [{"content": {"id": 444, "type": "page"}, "title": "Numeric"}]}),
+    );
+    let out = mcp
+        .call("confluence_search", json!({"cql": "type = page"}))
+        .await;
+    assert_eq!(
+        out["results"],
+        json!([{
+            "id": "444",
+            "type": "page",
+            "status": null,
+            "title": "Numeric",
+            "excerpt": null,
+            "webui": null
+        }])
+    );
+
+    mcp.fake.on_raw("GET", "/wiki/rest/api/search", 200, " \n");
+    let out = mcp
+        .call("confluence_search", json!({"cql": "type = page"}))
+        .await;
+    assert_eq!(out, json!({"size": null, "limit": 25, "results": []}));
+}
+
+#[tokio::test]
 async fn confluence_search_clamps_limit_to_1_through_100() {
     let mcp = Mcp::start().await;
     mcp.fake
@@ -262,18 +293,33 @@ async fn confluence_get_page_error_status_reports_code_and_body() {
 }
 
 #[tokio::test]
-async fn confluence_get_page_empty_204_is_reported_as_invalid_json() {
-    // Pins current behaviour: an empty 2xx body is reported as invalid JSON.
+async fn confluence_get_page_empty_204_is_slimmed_from_ok() {
+    // An empty body becomes {"ok": true}; get_page then slims it, so every page field is null.
     let mcp = Mcp::start().await;
     mcp.fake.on_raw("GET", PAGE_PATH, 204, "");
 
-    let err = mcp
-        .call_err("confluence_get_page", json!({"page_id": "123"}))
+    let out = mcp
+        .call("confluence_get_page", json!({"page_id": "123"}))
         .await;
-    assert_eq!(err["code"], -32603);
     assert_eq!(
-        err["message"],
-        "Invalid JSON: EOF while parsing a value at line 1 column 0"
+        out,
+        json!({
+            "id": null,
+            "type": null,
+            "title": null,
+            "status": null,
+            "space": null,
+            "version": null,
+            "lastUpdated": null,
+            "body": {
+                "representation": null,
+                "value": "",
+                "char_count_total": 0,
+                "char_count_included": 0,
+                "truncated": false
+            },
+            "links": {"webui": null, "tinyui": null}
+        })
     );
 }
 

@@ -1115,17 +1115,17 @@ impl AtlassianMcp {
         Extension(parts): Extension<Parts>,
         Parameters(p): Parameters<MoveBoardIssuesParams>,
     ) -> Result<String, ErrorData> {
-        validate_issue_keys(&p.issue_keys)?;
+        let issue_keys = validate_issue_keys(&p.issue_keys)?;
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
-        jira.move_issues_to_board(p.board_id, &p.issue_keys)
+        jira.move_issues_to_board(p.board_id, &issue_keys)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
         let out = serde_json::json!({
             "moved_to": "board",
             "board_id": p.board_id,
-            "issue_keys": p.issue_keys,
+            "issue_keys": issue_keys,
         });
         serde_json::to_string_pretty(&out)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1140,17 +1140,17 @@ impl AtlassianMcp {
         Extension(parts): Extension<Parts>,
         Parameters(p): Parameters<MoveBoardIssuesParams>,
     ) -> Result<String, ErrorData> {
-        validate_issue_keys(&p.issue_keys)?;
+        let issue_keys = validate_issue_keys(&p.issue_keys)?;
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
-        jira.move_issues_to_backlog(p.board_id, &p.issue_keys)
+        jira.move_issues_to_backlog(p.board_id, &issue_keys)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
 
         let out = serde_json::json!({
             "moved_to": "backlog",
             "board_id": p.board_id,
-            "issue_keys": p.issue_keys,
+            "issue_keys": issue_keys,
         });
         serde_json::to_string_pretty(&out)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -2396,7 +2396,8 @@ fn on_board_key_set(
         .collect()
 }
 
-fn validate_issue_keys(keys: &[String]) -> Result<(), ErrorData> {
+/// Checks the batch size and returns the keys trimmed; a blank key is rejected.
+fn validate_issue_keys(keys: &[String]) -> Result<Vec<String>, ErrorData> {
     if keys.is_empty() {
         return Err(ErrorData::invalid_params(
             "issue_keys must not be empty".to_string(),
@@ -2412,7 +2413,19 @@ fn validate_issue_keys(keys: &[String]) -> Result<(), ErrorData> {
             None,
         ));
     }
-    Ok(())
+    keys.iter()
+        .enumerate()
+        .map(|(i, key)| {
+            let trimmed = key.trim();
+            if trimmed.is_empty() {
+                return Err(ErrorData::invalid_params(
+                    format!("issue_keys[{i}] must not be blank"),
+                    None,
+                ));
+            }
+            Ok(trimmed.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2576,9 +2589,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_issue_keys_does_not_trim_keys() {
-        // Pins current behaviour: a blank key passes validation and goes to Jira unchanged.
-        assert!(validate_issue_keys(&["  ".to_string()]).is_ok());
+    fn validate_issue_keys_trims_and_rejects_blank() {
+        let padded = vec!["  A-1 ".to_string(), "B-2".to_string()];
+        assert_eq!(
+            validate_issue_keys(&padded).unwrap(),
+            vec!["A-1".to_string(), "B-2".to_string()]
+        );
+
+        let err = validate_issue_keys(&["A-1".to_string(), "  ".to_string()]).unwrap_err();
+        assert_eq!(err.code.0, -32602);
+        assert_eq!(err.message, "issue_keys[1] must not be blank");
     }
 
     #[test]

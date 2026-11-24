@@ -277,13 +277,12 @@ async fn get_issue_slims_realistic_issue_and_drops_noise() {
     let out = mcp
         .call("jira_get_issue", json!({"issue_key": "SWS-1"}))
         .await;
-    // Pins current behaviour: the mention text already starts with `@`, so the walker doubles it.
     assert_eq!(
         out,
         json!({
             "key": "SWS-1",
             "summary": "Fix login",
-            "description": "Login fails.\nRetry with @@Test User later.",
+            "description": "Login fails.\nRetry with @Test User later.",
             "status": {"name": "In Progress", "id": "3", "statusCategory": {"key": "indeterminate", "name": "In Progress"}},
             "attachments": [{
                 "id": "10001",
@@ -1264,6 +1263,57 @@ async fn move_to_board_rejects_empty_and_too_many_keys_before_request() {
 }
 
 #[tokio::test]
+async fn move_blank_key_never_reaches_jira() {
+    let mcp = Mcp::start().await;
+    for tool in ["jira_move_to_board", "jira_move_to_backlog"] {
+        let err = mcp
+            .call_err(tool, json!({"board_id": 7, "issue_keys": ["SWS-1", "  "]}))
+            .await;
+        assert_eq!(err["code"], -32602, "{tool}");
+        assert_eq!(err["message"], "issue_keys[1] must not be blank", "{tool}");
+    }
+    assert!(mcp.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn move_sends_padded_keys_trimmed() {
+    let mcp = Mcp::start().await;
+    mcp.fake
+        .on_raw("POST", "/rest/agile/1.0/board/7/issue", 204, "");
+    mcp.fake
+        .on_raw("POST", "/rest/agile/1.0/backlog/7/issue", 204, "");
+
+    let out = mcp
+        .call(
+            "jira_move_to_board",
+            json!({"board_id": 7, "issue_keys": ["  SWS-1 ", "SWS-2"]}),
+        )
+        .await;
+    assert_eq!(
+        out,
+        json!({"moved_to": "board", "board_id": 7, "issue_keys": ["SWS-1", "SWS-2"]})
+    );
+    assert_eq!(
+        mcp.fake.only_request().json(),
+        json!({"issues": ["SWS-1", "SWS-2"]})
+    );
+
+    let out = mcp
+        .call(
+            "jira_move_to_backlog",
+            json!({"board_id": 7, "issue_keys": [" SWS-3\t"]}),
+        )
+        .await;
+    assert_eq!(
+        out,
+        json!({"moved_to": "backlog", "board_id": 7, "issue_keys": ["SWS-3"]})
+    );
+    let requests = mcp.fake.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].json(), json!({"issues": ["SWS-3"]}));
+}
+
+#[tokio::test]
 async fn move_to_backlog_posts_board_scoped_endpoint() {
     let mcp = Mcp::start().await;
     mcp.fake
@@ -1335,12 +1385,88 @@ async fn search_pages_with_next_token_until_max_results() {
         seen[0].json(),
         json!({
             "jql": "project = SWS",
-            "maxResults": 100,
+            "maxResults": 3,
             "fields": ["key", "summary", "status", "issuetype", "assignee", "updated"]
         })
     );
-    // Pins current behaviour: the upstream page size is always 100, whatever max_results says.
+    // Two issues were collected, so the next page asks only for the one still needed.
+    assert_eq!(seen[1].json()["maxResults"], 1);
     assert_eq!(seen[1].json()["nextPageToken"], "t1");
+}
+
+#[tokio::test]
+async fn search_page_size_follows_max_results_and_start_at() {
+    let mcp = Mcp::start().await;
+    let page = |n: usize| -> Value {
+        Value::Array(
+            (1..=n)
+                .map(|i| raw_issue(&format!("SWS-{i}"), "x"))
+                .collect(),
+        )
+    };
+    let sizes = |script: &SharedScript| -> Vec<u64> {
+        seen_requests(script)
+            .iter()
+            .map(|r| r.json()["maxResults"].as_u64().expect("maxResults"))
+            .collect()
+    };
+
+    // max_results 5, start_at 0: one request for 5.
+    let (site, script) =
+        scripted_jira(vec![reply(200, json!({"issues": page(5), "isLast": true}))]).await;
+    call_on_site(
+        &mcp,
+        &site,
+        "jira_search",
+        json!({"jql": "project = SWS", "max_results": 5}),
+    )
+    .await;
+    assert_eq!(sizes(&script), vec![5]);
+
+    // max_results 5, start_at 3: the three skipped issues count, so 8 are asked for.
+    let (site, script) =
+        scripted_jira(vec![reply(200, json!({"issues": page(8), "isLast": true}))]).await;
+    call_on_site(
+        &mcp,
+        &site,
+        "jira_search",
+        json!({"jql": "project = SWS", "max_results": 5, "start_at": 3}),
+    )
+    .await;
+    assert_eq!(sizes(&script), vec![8]);
+
+    // max_results 150 is clamped to 100 (as before), so one request for 100.
+    let (site, script) = scripted_jira(vec![reply(
+        200,
+        json!({"issues": page(100), "isLast": false, "nextPageToken": "t1"}),
+    )])
+    .await;
+    call_on_site(
+        &mcp,
+        &site,
+        "jira_search",
+        json!({"jql": "project = SWS", "max_results": 150}),
+    )
+    .await;
+    assert_eq!(sizes(&script), vec![100]);
+
+    // max_results 100, start_at 3: first 100 (three skipped), then the 3 still needed.
+    let (site, script) = scripted_jira(vec![
+        reply(
+            200,
+            json!({"issues": page(100), "isLast": false, "nextPageToken": "t1"}),
+        ),
+        reply(200, json!({"issues": page(3), "isLast": true})),
+    ])
+    .await;
+    call_on_site(
+        &mcp,
+        &site,
+        "jira_search",
+        json!({"jql": "project = SWS", "max_results": 100, "start_at": 3}),
+    )
+    .await;
+    assert_eq!(sizes(&script), vec![100, 3]);
 }
 
 #[tokio::test]
@@ -1465,7 +1591,7 @@ async fn search_cursor_mode_login_failure_is_an_error() {
         headers: vec![("X-Seraph-LoginReason", "AUTHENTICATED_FAILED")],
         body: json!({"issues": [], "isLast": true}).to_string(),
     };
-    let (site, _script) = scripted_jira(vec![failed.clone()]).await;
+    let (site, _script) = scripted_jira(vec![failed]).await;
 
     let resp = call_on_site(
         &mcp,
@@ -1479,11 +1605,85 @@ async fn search_cursor_mode_login_failure_is_an_error() {
         resp["error"]["message"],
         "Jira search/jql failed: Jira returned 401 Unauthorized: X-Seraph-LoginReason AUTHENTICATED_FAILED (check email and API token)"
     );
+}
 
-    // Pins current behaviour: plain paging ignores the login header and returns the anonymous 200.
+#[tokio::test]
+async fn login_failure_on_plain_search_is_an_error() {
+    let mcp = Mcp::start().await;
+    let failed = Reply {
+        status: 200,
+        headers: vec![("X-Seraph-LoginReason", "AUTHENTICATED_FAILED")],
+        body: json!({"issues": [], "isLast": true}).to_string(),
+    };
     let (site, _script) = scripted_jira(vec![failed]).await;
+
     let resp = call_on_site(&mcp, &site, "jira_search", json!({"jql": "project = SWS"})).await;
-    assert_eq!(result_json(&resp)["issues"], json!([]));
+    assert_eq!(resp["error"]["code"], -32603);
+    assert_eq!(
+        resp["error"]["message"],
+        "Jira search/jql failed: Jira returned 401 Unauthorized: X-Seraph-LoginReason AUTHENTICATED_FAILED (check email and API token)"
+    );
+}
+
+#[tokio::test]
+async fn login_failure_on_get_issue_404_reports_auth_not_missing_issue() {
+    let mcp = Mcp::start().await;
+    let failed = Reply {
+        status: 404,
+        headers: vec![("X-Seraph-LoginReason", "AUTHENTICATED_FAILED")],
+        body: json!({"errorMessages": ["Issue does not exist or you do not have permission to see it."]})
+            .to_string(),
+    };
+    let (site, _script) = scripted_jira(vec![failed]).await;
+
+    let resp = call_on_site(&mcp, &site, "jira_get_issue", json!({"issue_key": "SWS-1"})).await;
+    assert_eq!(resp["error"]["code"], -32603);
+    assert_eq!(
+        resp["error"]["message"],
+        "Jira returned 401 Unauthorized: X-Seraph-LoginReason AUTHENTICATED_FAILED (check email and API token)"
+    );
+}
+
+#[tokio::test]
+async fn login_failure_on_write_204_is_an_error() {
+    let mcp = Mcp::start().await;
+    let failed = Reply {
+        status: 204,
+        headers: vec![("X-Seraph-LoginReason", "AUTHENTICATED_FAILED")],
+        body: String::new(),
+    };
+    let (site, script) = scripted_jira(vec![failed]).await;
+
+    let resp = call_on_site(
+        &mcp,
+        &site,
+        "jira_update_summary",
+        json!({"issue_key": "SWS-1", "summary": "New title"}),
+    )
+    .await;
+    assert_eq!(resp["error"]["code"], -32603);
+    assert_eq!(
+        resp["error"]["message"],
+        "Jira returned 401 Unauthorized: X-Seraph-LoginReason AUTHENTICATED_FAILED (check email and API token)"
+    );
+    assert_eq!(seen_requests(&script).len(), 1);
+}
+
+#[tokio::test]
+async fn login_reason_ok_is_ignored() {
+    let mcp = Mcp::start().await;
+    let ok = Reply {
+        status: 200,
+        headers: vec![("X-Seraph-LoginReason", "OK")],
+        body: json!({"issues": [raw_issue("SWS-1", "A")], "isLast": true}).to_string(),
+    };
+    let (site, _script) = scripted_jira(vec![ok]).await;
+
+    let resp = call_on_site(&mcp, &site, "jira_search", json!({"jql": "project = SWS"})).await;
+    assert_eq!(
+        result_json(&resp)["issues"],
+        json!([slim_issue("SWS-1", "A")])
+    );
 }
 
 #[tokio::test]

@@ -52,8 +52,7 @@ impl ConfluenceClient {
             return Err(format!("Confluence returned {status}: {msg}"));
         }
 
-        let raw: Value =
-            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let raw = parse_body(&bytes)?;
 
         let results = raw
             .get("results")
@@ -182,8 +181,7 @@ impl ConfluenceClient {
             return Err(format!("Confluence returned {status_code}: {msg}"));
         }
 
-        let raw: Value =
-            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let raw = parse_body(&bytes)?;
 
         // Return a slim view: id, title, status, webui link
         let webui = raw.pointer("/_links/webui").and_then(|w| w.as_str());
@@ -225,7 +223,24 @@ impl ConfluenceClient {
             return Err(format!("Confluence returned {status}: {msg}"));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON: {e}"))
+        parse_body(&bytes)
+    }
+}
+
+/// Parses a 2xx body; a blank body (no content) becomes `{"ok": true}`, as in Jira and Bitbucket.
+fn parse_body(bytes: &[u8]) -> Result<Value, String> {
+    if bytes.trim_ascii().is_empty() {
+        return Ok(json!({ "ok": true }));
+    }
+    serde_json::from_slice(bytes).map_err(|e| format!("Invalid JSON: {e}"))
+}
+
+/// An id as text: a JSON string, or a JSON number written out in full.
+fn id_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -233,8 +248,8 @@ fn slim_search_hit(hit: &Value) -> Value {
     let content = hit.get("content").and_then(|c| c.as_object());
     let id = content
         .and_then(|c| c.get("id"))
-        .and_then(|i| i.as_str())
-        .or_else(|| hit.get("id").and_then(|i| i.as_str()));
+        .and_then(id_text)
+        .or_else(|| hit.get("id").and_then(id_text));
     let ctype = content
         .and_then(|c| c.get("type"))
         .and_then(|t| t.as_str())
@@ -481,10 +496,11 @@ mod tests {
     }
 
     #[test]
-    fn slim_search_hit_numeric_id_is_dropped() {
-        // Pins current behaviour: a numeric id is not a string, so it becomes null.
+    fn slim_search_hit_numeric_id_becomes_string() {
         let slim = slim_search_hit(&json!({"content": {"id": 444}}));
-        assert_eq!(slim["id"], Value::Null);
+        assert_eq!(slim["id"], json!("444"));
+        let top = slim_search_hit(&json!({"id": 7}));
+        assert_eq!(top["id"], json!("7"));
     }
 
     #[test]
