@@ -2,7 +2,7 @@ use http::request::Parts;
 use reqwest::Client;
 use rmcp::handler::server::tool::Extension;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{Implementation, ServerCapabilities, ServerConfig as McpServerConfig};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
@@ -68,6 +68,11 @@ fn bb_workspace_override(w: &Option<String>) -> Option<&str> {
 
 fn default_jira_content_format() -> String {
     "plain".to_string()
+}
+
+/// Quote `s` as one POSIX shell word, escaping embedded single quotes.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1286,7 +1291,11 @@ impl AtlassianMcp {
             "method": "PUT",
             "expires_in_seconds": ttl.as_secs(),
             "single_use": true,
-            "curl": format!("curl -sS -X PUT --data-binary @'{filename}' '{upload_url}'"),
+            "curl": format!(
+                "curl -sS -X PUT --data-binary @{} {}",
+                shell_single_quote(&filename),
+                shell_single_quote(&upload_url)
+            ),
         });
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -2317,16 +2326,18 @@ impl AtlassianMcp {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for AtlassianMcp {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.instructions = Some(
-            "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email -- NOT the Bitbucket username and NOT x-bitbucket-api-token-auth, which the REST API rejects), X-Bitbucket-Api-Token (an Atlassian API token with Bitbucket repository scopes; the legacy name X-Bitbucket-App-Password is still accepted) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace. Pipelines: bitbucket_list_pipelines / get_pipeline / list_pipeline_steps / get_pipeline_step_log / list_deployments read runs; trigger_pipeline and stop_pipeline need the write:pipeline:bitbucket token scope; the *_pipeline_variable tools (repository or per-deployment-environment) need admin:pipeline:bitbucket to write."
+    fn get_info(&self) -> McpServerConfig {
+        McpServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions(
+                "Atlassian Cloud MCP: Jira REST v3 + Confluence REST + Bitbucket REST 2.0. Jira/Confluence: every MCP HTTP request MUST include X-Atlassian-Site-Url, X-Atlassian-Email, X-Atlassian-Api-Token (optional X-Atlassian-Confluence-Site-Url). Missing those yields -32600 with reason missing_atlassian_credential_headers. Bitbucket tools: send X-Bitbucket-Workspace, X-Bitbucket-Username (your Atlassian account email -- NOT the Bitbucket username and NOT x-bitbucket-api-token-auth, which the REST API rejects), X-Bitbucket-Api-Token (an Atlassian API token with Bitbucket repository scopes; the legacy name X-Bitbucket-App-Password is still accepted) on each request; optional X-Bitbucket-Base-Url (default https://api.bitbucket.org/2.0 for Cloud; set for Server/Data Center API roots). Missing Bitbucket headers yields -32600 with reason missing_bitbucket_credential_headers. Optional `workspace` on Bitbucket tool arguments overrides X-Bitbucket-Workspace. Pipelines: bitbucket_list_pipelines / get_pipeline / list_pipeline_steps / get_pipeline_step_log / list_deployments read runs; trigger_pipeline and stop_pipeline need the write:pipeline:bitbucket token scope; the *_pipeline_variable tools (repository or per-deployment-environment) need admin:pipeline:bitbucket to write."
                 .to_string(),
-        );
-        info
+            )
     }
 }
 
@@ -2515,5 +2526,30 @@ mod tests {
         assert!(parse(r#","include":null"#).include.is_empty());
         assert!(parse("").exclude.is_empty());
         assert!(parse("").include.is_empty());
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_quote() {
+        assert_eq!(shell_single_quote("it's.png"), "'it'\\''s.png'");
+        assert_eq!(shell_single_quote("a.png"), "'a.png'");
+    }
+
+    #[test]
+    fn get_info_advertises_tools_only_and_names_this_server() {
+        let s = AtlassianMcp::new(
+            reqwest::Client::new(),
+            crate::upload::UploadTickets::default(),
+            None,
+        );
+        let info = rmcp::ServerHandler::get_info(&s);
+        assert!(info.capabilities.tools.is_some());
+        assert!(info.capabilities.resources.is_none());
+        assert!(info.capabilities.prompts.is_none());
+        assert_eq!(info.server_info.name, "atlassian-mcp");
+        assert!(
+            info.instructions
+                .unwrap()
+                .starts_with("Atlassian Cloud MCP")
+        );
     }
 }

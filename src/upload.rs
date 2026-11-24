@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use http::HeaderMap;
-use rand::RngCore;
+use rand::Rng;
 use reqwest::Client;
 
 use crate::credentials::AtlassianCredentials;

@@ -666,7 +666,7 @@ impl BitbucketClient {
         let rev = revision.map(str::trim).filter(|s| !s.is_empty());
         let has_range = include.iter().chain(exclude).any(|v| !v.trim().is_empty());
         let url = match (rev, has_range) {
-            (Some(rev), _) => format!("{base}/commits/{rev}"),
+            (Some(rev), _) => format!("{base}/commits/{}", commit_path_segment(rev)?),
             (None, false) => format!("{base}/commits/HEAD"),
             (None, true) => format!("{base}/commits"),
         };
@@ -687,7 +687,7 @@ impl BitbucketClient {
         repo_slug: &str,
         commit: &str,
     ) -> Result<Value, String> {
-        let commit = require_non_empty(commit, "commit")?;
+        let commit = commit_path_segment(commit)?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/commit/{commit}");
         let req = self
@@ -1856,6 +1856,20 @@ mod tests {
             req.url().as_str(),
             "https://api.bitbucket.org/2.0/repositories/ws/r/commits?include=dev&exclude=master&exclude=3.0.0&pagelen=2&page=2&ctx=abc"
         );
+    }
+
+    #[test]
+    fn list_commits_encodes_revision() {
+        let req = test_client()
+            .list_commits_request(None, "r", Some("feature/a b?c"), &[], &[], None, None, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            req.url().as_str(),
+            "https://api.bitbucket.org/2.0/repositories/ws/r/commits/feature%2Fa%20b%3Fc"
+        );
+        assert_eq!(req.url().query(), None);
     }
 
     #[test]

@@ -57,11 +57,7 @@ async fn main() {
             ))
         },
         Arc::new(NeverSessionManager::default()),
-        StreamableHttpServerConfig {
-            stateful_mode: false,
-            json_response: true,
-            ..Default::default()
-        },
+        mcp_http_config(),
     );
 
     let app = axum::Router::new()
@@ -92,6 +88,27 @@ async fn main() {
         .unwrap();
 }
 
+// Host validation is off: the server holds no credentials and runs behind APISIX, which forwards the public Host.
+fn mcp_http_config() -> StreamableHttpServerConfig {
+    StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .disable_allowed_hosts()
+}
+
 async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_http_config_is_stateless_json_and_accepts_any_host() {
+        let c = mcp_http_config();
+        assert!(!c.legacy_session_mode);
+        assert!(c.json_response);
+        assert!(c.allowed_hosts.is_empty());
+    }
 }
