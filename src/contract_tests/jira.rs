@@ -401,8 +401,7 @@ async fn get_issue_blank_key_is_rejected_before_any_request() {
     let err = mcp
         .call_err("jira_get_issue", json!({"issue_key": "   "}))
         .await;
-    // Pins current behaviour: input validation returns internal error (-32603), not invalid params.
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "issue_key must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
@@ -613,7 +612,7 @@ async fn update_summary_blank_is_error_before_request() {
             json!({"issue_key": "SWS-1", "summary": "  "}),
         )
         .await;
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "summary must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
@@ -687,8 +686,7 @@ async fn create_issue_blank_required_fields_fail_before_request() {
     ];
     for (args, message) in cases {
         let err = mcp.call_err("jira_create_issue", args).await;
-        // Pins current behaviour: blank input is an internal error (-32603), not invalid params.
-        assert_eq!(err["code"], -32603);
+        assert_eq!(err["code"], -32602);
         assert_eq!(err["message"], message);
     }
     assert!(mcp.fake.requests().is_empty());
@@ -895,7 +893,7 @@ async fn transition_issue_blank_id_fails_before_request() {
             json!({"issue_key": "SWS-1", "transition_id": "  "}),
         )
         .await;
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "transition_id must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
@@ -982,7 +980,7 @@ async fn list_boards_passes_filters_and_slims_values() {
 }
 
 #[tokio::test]
-async fn list_boards_clamps_max_and_omits_blank_project() {
+async fn list_boards_max_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     mcp.fake
         .on("GET", "/rest/agile/1.0/board", 200, json!({"values": []}));
@@ -994,12 +992,24 @@ async fn list_boards_clamps_max_and_omits_blank_project() {
         defaults,
         json!({"boards": [], "isLast": null, "total": null})
     );
-    mcp.call("jira_list_boards", json!({"max_results": 500}))
+    mcp.call("jira_list_boards", json!({"max_results": 50}))
         .await;
-    mcp.call("jira_list_boards", json!({"max_results": 0}))
+    mcp.call("jira_list_boards", json!({"max_results": 1}))
         .await;
 
+    for bad in [0, 51] {
+        let err = mcp
+            .call_err("jira_list_boards", json!({"max_results": bad}))
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("max_results must be between 1 and 50, got {bad}")
+        );
+    }
+
     let seen = mcp.fake.requests();
+    assert_eq!(seen.len(), 3);
     assert_eq!(
         seen[0].query_pairs(),
         q(&[("maxResults", "50"), ("startAt", "0")])
@@ -1118,7 +1128,7 @@ async fn board_issues_backlog_scope_puts_done_filter_before_order_by() {
 }
 
 #[tokio::test]
-async fn board_issues_paging_applies_to_final_list_and_clamps_max() {
+async fn board_issues_paging_applies_to_final_list_and_rejects_bad_max() {
     let mcp = Mcp::start().await;
     mcp.fake.on(
         "GET",
@@ -1140,13 +1150,20 @@ async fn board_issues_paging_applies_to_final_list_and_clamps_max() {
     assert_eq!(page["total"], 3);
     assert_eq!(page["issues"], json!([slim_issue("SWS-2", "Second")]));
 
-    let clamped = mcp
-        .call(
-            "jira_board_issues",
-            json!({"board_id": 7, "scope": "all", "max_results": 0}),
-        )
-        .await;
-    assert_eq!(clamped["issues"], json!([slim_issue("SWS-1", "First")]));
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err(
+                "jira_board_issues",
+                json!({"board_id": 7, "scope": "all", "max_results": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("max_results must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -1435,20 +1452,21 @@ async fn search_page_size_follows_max_results_and_start_at() {
     .await;
     assert_eq!(sizes(&script), vec![8]);
 
-    // max_results 150 is clamped to 100 (as before), so one request for 100.
-    let (site, script) = scripted_jira(vec![reply(
-        200,
-        json!({"issues": page(100), "isLast": false, "nextPageToken": "t1"}),
-    )])
-    .await;
-    call_on_site(
+    // max_results 150 is outside 1 to 100: rejected before any request.
+    let (site, script) = scripted_jira(vec![]).await;
+    let resp = call_on_site(
         &mcp,
         &site,
         "jira_search",
         json!({"jql": "project = SWS", "max_results": 150}),
     )
     .await;
-    assert_eq!(sizes(&script), vec![100]);
+    assert_eq!(resp["error"]["code"], -32602);
+    assert_eq!(
+        resp["error"]["message"],
+        "max_results must be between 1 and 100, got 150"
+    );
+    assert!(seen_requests(&script).is_empty());
 
     // max_results 100, start_at 3: first 100 (three skipped), then the 3 still needed.
     let (site, script) = scripted_jira(vec![
@@ -1690,7 +1708,7 @@ async fn login_reason_ok_is_ignored() {
 async fn search_validation_fails_before_request() {
     let mcp = Mcp::start().await;
     let blank = mcp.call_err("jira_search", json!({"jql": "  "})).await;
-    assert_eq!(blank["code"], -32603);
+    assert_eq!(blank["code"], -32602);
     assert_eq!(blank["message"], "jql must not be empty");
 
     let start = mcp
@@ -1699,7 +1717,7 @@ async fn search_validation_fails_before_request() {
             json!({"jql": "project = SWS", "start_at": 1, "next_page_token": "t1"}),
         )
         .await;
-    assert_eq!(start["code"], -32603);
+    assert_eq!(start["code"], -32602);
     assert_eq!(
         start["message"],
         "start_at cannot be combined with fields or next_page_token; page with next_page_token"
@@ -1708,13 +1726,13 @@ async fn search_validation_fails_before_request() {
     let no_fields = mcp
         .call_err("jira_search", json!({"jql": "project = SWS", "fields": []}))
         .await;
-    assert_eq!(no_fields["code"], -32603);
+    assert_eq!(no_fields["code"], -32602);
     assert_eq!(no_fields["message"], "fields must list at least one field");
     assert!(mcp.fake.requests().is_empty());
 }
 
 #[tokio::test]
-async fn search_clamps_reported_max_results() {
+async fn search_max_results_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     mcp.fake.on(
         "POST",
@@ -1724,13 +1742,25 @@ async fn search_clamps_reported_max_results() {
     );
 
     let low = mcp
-        .call("jira_search", json!({"jql": "x", "max_results": 0}))
+        .call("jira_search", json!({"jql": "x", "max_results": 1}))
         .await;
     let high = mcp
-        .call("jira_search", json!({"jql": "x", "max_results": 500}))
+        .call("jira_search", json!({"jql": "x", "max_results": 100}))
         .await;
     assert_eq!(low["maxResults"], 1);
     assert_eq!(high["maxResults"], 100);
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err("jira_search", json!({"jql": "x", "max_results": bad}))
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("max_results must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 2);
 }
 
 // ---- jira_search_users ----
@@ -1769,17 +1799,17 @@ async fn search_users_passes_query_and_slims_results() {
 }
 
 #[tokio::test]
-async fn search_users_clamps_max_results_and_rejects_blank_query() {
+async fn search_users_max_bounds_and_blank_query_are_rejected() {
     let mcp = Mcp::start().await;
     mcp.fake
         .on("GET", "/rest/api/3/user/search", 200, json!([]));
 
     mcp.call(
         "jira_search_users",
-        json!({"query": "x", "max_results": 500}),
+        json!({"query": "x", "max_results": 50}),
     )
     .await;
-    mcp.call("jira_search_users", json!({"query": "x", "max_results": 0}))
+    mcp.call("jira_search_users", json!({"query": "x", "max_results": 1}))
         .await;
     let seen = mcp.fake.requests();
     assert_eq!(
@@ -1791,10 +1821,24 @@ async fn search_users_clamps_max_results_and_rejects_blank_query() {
         q(&[("query", "x"), ("maxResults", "1")])
     );
 
+    for bad in [0, 51] {
+        let err = mcp
+            .call_err(
+                "jira_search_users",
+                json!({"query": "x", "max_results": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("max_results must be between 1 and 50, got {bad}")
+        );
+    }
+
     let err = mcp
         .call_err("jira_search_users", json!({"query": "   "}))
         .await;
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "query must not be empty");
     assert_eq!(mcp.fake.requests().len(), 2);
 }
@@ -1915,7 +1959,7 @@ async fn add_attachment_posts_multipart_and_slims_response() {
 }
 
 #[tokio::test]
-async fn add_attachment_invalid_base64_is_invalid_request() {
+async fn add_attachment_invalid_base64_is_invalid_params() {
     let mcp = Mcp::start().await;
     let err = mcp
         .call_err(
@@ -1923,7 +1967,7 @@ async fn add_attachment_invalid_base64_is_invalid_request() {
             json!({"issue_key": "SWS-1", "filename": "a.png", "file_base64": "not base64!"}),
         )
         .await;
-    assert_eq!(err["code"], -32600);
+    assert_eq!(err["code"], -32602);
     assert_eq!(
         err["message"],
         "Invalid base64 in file_base64: Invalid symbol 32, offset 3."
@@ -1940,8 +1984,7 @@ async fn add_attachment_blank_filename_fails_before_request() {
             json!({"issue_key": "SWS-1", "filename": "  ", "file_base64": "aGVsbG8="}),
         )
         .await;
-    // Pins current behaviour: a blank filename is an internal error (-32603), not invalid params.
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "filename must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
@@ -1965,7 +2008,7 @@ async fn delete_attachment_blank_id_and_upstream_404() {
     let blank = mcp
         .call_err("jira_delete_attachment", json!({"attachment_id": "  "}))
         .await;
-    assert_eq!(blank["code"], -32603);
+    assert_eq!(blank["code"], -32602);
     assert_eq!(blank["message"], "attachment_id must not be empty");
     assert!(mcp.fake.requests().is_empty());
 
@@ -1987,7 +2030,7 @@ async fn delete_attachment_blank_id_and_upstream_404() {
 // ---- jira_get_attachment_upload_url ----
 
 #[tokio::test]
-async fn upload_url_ttl_defaults_and_clamps_to_one_hour() {
+async fn upload_url_ttl_defaults_and_bounds_are_enforced() {
     let mcp = Mcp::start().await;
     let default = mcp
         .call(
@@ -2007,7 +2050,7 @@ async fn upload_url_ttl_defaults_and_clamps_to_one_hour() {
         format!("curl -sS -X PUT --data-binary @'report.zip' '{url}'")
     );
 
-    for (requested, expected) in [(0, 1), (120, 120), (99_999, 3600)] {
+    for (requested, expected) in [(1, 1), (120, 120), (3600, 3600)] {
         let out = mcp
             .call(
                 "jira_get_attachment_upload_url",
@@ -2015,6 +2058,19 @@ async fn upload_url_ttl_defaults_and_clamps_to_one_hour() {
             )
             .await;
         assert_eq!(out["expires_in_seconds"], expected, "ttl {requested}");
+    }
+    for bad in [0, 3601] {
+        let err = mcp
+            .call_err(
+                "jira_get_attachment_upload_url",
+                json!({"issue_key": "SWS-1", "filename": "report.zip", "ttl_seconds": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("ttl_seconds must be between 1 and 3600, got {bad}")
+        );
     }
     assert!(mcp.fake.requests().is_empty());
 }
@@ -2037,6 +2093,6 @@ async fn upload_url_trims_key_and_rejects_blank_key() {
             json!({"issue_key": "   ", "filename": "report.zip"}),
         )
         .await;
-    assert_eq!(err["code"], -32600);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "issue_key and filename must not be empty");
 }

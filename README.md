@@ -228,7 +228,15 @@ Most tools accept optional `workspace` (overrides `X-Bitbucket-Workspace`) and, 
 
 ## Errors and paging
 
-A failed tool call comes back as a JSON-RPC error, not as a result with `isError`: `{"error": {"code": -32603, "message": "..."}}`. When an upstream API refused the request, the message carries its HTTP status first, so scripts can match it:
+A failed tool call comes back as a JSON-RPC error, not as a result with `isError`. The code says whose fault it is:
+
+| Code | Meaning |
+|------|---------|
+| `-32600` | Missing credential headers (`data.reason` names which) |
+| `-32602` | Invalid arguments, rejected before any Atlassian request: blank required values, bad formats, or a limit outside its documented range (`max_results must be between 1 and 100, got 150`). Limits are never silently clamped. |
+| `-32603` | Atlassian refused the request, could not be reached, or sent something unreadable |
+
+When an upstream API refused the request, the message carries its HTTP status first, so scripts can match it:
 
 | Source | Message shape |
 |--------|---------------|
@@ -236,7 +244,7 @@ A failed tool call comes back as a JSON-RPC error, not as a result with `isError
 | Jira (`jira_search`) | `Jira search/jql failed: Jira returned 429 Too Many Requests: <response body>` |
 | Jira (other tools) | `Jira returned 403 Forbidden: <response body>` |
 
-Jira Cloud answers a bad email or API token with HTTP 200 and serves the request anonymously, so a search simply finds nothing. In cursor mode (`fields` or `next_page_token` set), `jira_search` detects this from the `X-Seraph-LoginReason` header and fails with `Jira returned 401 Unauthorized: ...` instead.
+Jira Cloud answers a bad email or API token as an anonymous user, with a status that depends on the endpoint (200 with no results for a search, 404 for an issue). Every Jira tool checks the `X-Seraph-LoginReason` header first and fails with `Jira returned 401 Unauthorized: X-Seraph-LoginReason AUTHENTICATED_FAILED (check email and API token)` instead.
 
 Paging: Bitbucket list tools return Bitbucket's `next` link. Pass its `page` value back as `page` (and `ctx` for `bitbucket_list_commits` when present). For `bitbucket_file_history` the page value is an opaque string such as `zxUz`, not a number. `jira_search` pages with `nextPageToken` in cursor mode.
 

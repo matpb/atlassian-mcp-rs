@@ -33,7 +33,7 @@ This codebase is yours: what it's for and how it's built are your call, and you'
 - New tool: copy the closest existing one (for example `jira_update_description` or `jira_update_summary`) for naming, description wording and output shape.
 - Outputs are slimmed JSON for an LLM, not raw API responses: pick the fields an agent needs.
 - Tool descriptions name the headers the tool requires; agents read them.
-- Missing credential headers return JSON-RPC `-32600` with `reason` `missing_atlassian_credential_headers` or `missing_bitbucket_credential_headers`. Upstream failures return `-32603` with the HTTP status first in the message (`Jira returned 403 Forbidden: ...`); the README "Errors and paging" section documents those shapes, keep them stable.
+- Missing credential headers return JSON-RPC `-32600` with `reason` `missing_atlassian_credential_headers` or `missing_bitbucket_credential_headers`. Invalid arguments return `-32602` before any request (`ClientError::Invalid` in `src/error.rs`; ranges via `check_range`, never clamp). Upstream failures return `-32603` (`ClientError::Upstream`) with the HTTP status first in the message (`Jira returned 403 Forbidden: ...`); the README "Errors and paging" section documents those shapes, keep them stable.
 - Jira rich text is ADF: `content_format` `plain` (default) wraps text in paragraphs, `adf` takes a full ADF document string.
 - Comments are one or two factual lines.
 
@@ -43,7 +43,7 @@ This codebase is yours: what it's for and how it's built are your call, and you'
 - Do not take the upload body as a `Bytes` extractor in `handle_upload`: it buffers the whole body before the token check, so anyone can make the server allocate up to the upload cap with a bogus token. Validate the token first, then read the body with a limit.
 - Upload tickets live in process memory: they vanish on restart and do not work across replicas. Behind a proxy, set `MCP_PUBLIC_URL` (or forward `X-Forwarded-Proto`/`Host`) or the returned URL falls back to the raw `Host` header over plain `http` (`upload::public_origin`).
 - `X-Bitbucket-Username` must be the Atlassian account email. The static `x-bitbucket-api-token-auth` username works for git over HTTPS but the REST API rejects it with 401.
-- Jira Cloud answers a bad email or token with HTTP 200 as an anonymous user, so searches just come back empty. Only cursor-mode `jira_search` detects this via `X-Seraph-LoginReason`; do not assume a 200 means you are authenticated.
+- Jira Cloud answers a bad email or token as an anonymous user: 200 with empty results on search, 404 on an issue. Every Jira send path calls `check_login` on `X-Seraph-LoginReason` before looking at the status; keep that in any new send path.
 - `X-Bitbucket-App-Password` is a legacy alias of `X-Bitbucket-Api-Token`; keep accepting it, existing clients still send it.
 - Do not put Atlassian tokens in `.env`: it only configures bind and logging (`MCP_HOST`, `MCP_PORT`, `MCP_PUBLIC_URL`, `MCP_MAX_UPLOAD_BYTES`, `RUST_LOG`).
 

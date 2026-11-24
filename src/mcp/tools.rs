@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::bitbucket::{BitbucketClient, PipelineVariable};
 use crate::confluence::ConfluenceClient;
 use crate::credentials;
+use crate::error::check_range;
 use crate::jira::{self, JiraClient};
 use crate::upload::{self, UploadTickets};
 
@@ -187,7 +188,7 @@ struct GetAttachmentUploadUrlParams {
     issue_key: String,
     /// File name including extension, e.g. `report.zip`
     filename: String,
-    /// Seconds the upload URL stays valid. Default 600, max 3600.
+    /// Seconds the upload URL stays valid (1 to 3600, default 600).
     ttl_seconds: Option<u64>,
 }
 
@@ -330,6 +331,7 @@ struct BbListReposParams {
     /// When set, use this workspace instead of `X-Bitbucket-Workspace`
     #[serde(default)]
     workspace: Option<String>,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -354,6 +356,7 @@ struct BbListPrsParams {
     /// OPEN, MERGED, DECLINED, SUPERSEDED; omit for all active states per API defaults
     #[serde(default)]
     state: Option<String>,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -369,6 +372,7 @@ struct BbPrIdParams {
     workspace: Option<String>,
     repo_slug: String,
     pull_request_id: u32,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -469,6 +473,7 @@ struct BbListCommitsParams {
     /// Commits not reachable from these refs: one string or a list of strings
     #[serde(default, deserialize_with = "string_or_vec")]
     exclude: Vec<String>,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -491,6 +496,7 @@ struct BbListTagsParams {
     #[serde(default)]
     workspace: Option<String>,
     repo_slug: String,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -523,6 +529,7 @@ struct BbFileHistoryParams {
     commit: String,
     /// File path inside the repository, e.g. `app/Info.plist`
     path: String,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     /// Opaque cursor: the `page` value of Bitbucket's `next` link, passed verbatim (string or number)
@@ -571,6 +578,7 @@ struct BbListBranchesParams {
     #[serde(default)]
     workspace: Option<String>,
     repo_slug: String,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -587,6 +595,7 @@ struct BbSearchUsersParams {
     /// Search term matched against display name and nickname.
     #[serde(default)]
     query: Option<String>,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -697,6 +706,7 @@ struct BbListDeploymentsParams {
     #[serde(default)]
     workspace: Option<String>,
     repo_slug: String,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -730,6 +740,7 @@ struct BbListVariablesParams {
     /// Deployment environment name, slug or UUID. Omit for repository-level variables.
     #[serde(default)]
     environment: Option<String>,
+    /// Page size (1 to 100).
     #[serde(default)]
     pagelen: Option<u32>,
     #[serde(default)]
@@ -800,7 +811,7 @@ impl AtlassianMcp {
         let value = jira
             .get_issue_for_ai(&p.issue_key, p.include_adf)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -818,11 +829,11 @@ impl AtlassianMcp {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
         let body = jira::document_from_content_format(&p.content_format, &p.comment)
-            .map_err(|e| ErrorData::invalid_params(e, None))?;
+            .map_err(ErrorData::from)?;
         let value = jira
             .add_comment_with_body(&p.issue_key, body)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -840,11 +851,11 @@ impl AtlassianMcp {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
         let doc = jira::document_from_content_format(&p.content_format, &p.description)
-            .map_err(|e| ErrorData::invalid_params(e, None))?;
+            .map_err(ErrorData::from)?;
         let value = jira
             .update_description_with_adf(&p.issue_key, doc)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -864,7 +875,7 @@ impl AtlassianMcp {
         let value = jira
             .update_summary(&p.issue_key, &p.summary)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -886,13 +897,13 @@ impl AtlassianMcp {
             Some(s) if s.trim().is_empty() => None,
             Some(s) => Some(
                 jira::document_from_content_format(&p.description_content_format, s)
-                    .map_err(|e| ErrorData::invalid_params(e, None))?,
+                    .map_err(ErrorData::from)?,
             ),
         };
         let value = jira
             .create_issue(&p.project_key, &p.issue_type, &p.summary, desc)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -912,7 +923,7 @@ impl AtlassianMcp {
         let value = jira
             .get_transitions(&p.issue_key)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -932,7 +943,7 @@ impl AtlassianMcp {
         let value = jira
             .get_changelog(&p.issue_key, p.field.as_deref(), p.max_results, p.start_at)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -952,7 +963,7 @@ impl AtlassianMcp {
         let value = jira
             .transition_issue(&p.issue_key, &p.transition_id)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -972,7 +983,7 @@ impl AtlassianMcp {
         let value = jira
             .set_assignee(&p.issue_key, p.account_id.as_deref())
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -989,11 +1000,14 @@ impl AtlassianMcp {
     ) -> Result<String, ErrorData> {
         let creds = Self::resolve(&parts)?;
         let jira = JiraClient::new(self.http.clone(), &creds);
-        let max = p.max_results.unwrap_or(50).clamp(1, 50);
         let raw = jira
-            .list_boards(p.project_key.as_deref(), max, p.start_at.unwrap_or(0))
+            .list_boards(
+                p.project_key.as_deref(),
+                p.max_results.unwrap_or(50),
+                p.start_at.unwrap_or(0),
+            )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         let boards: Vec<Value> = raw
             .get("values")
@@ -1042,26 +1056,29 @@ impl AtlassianMcp {
             ));
         }
 
+        let max_results = p.max_results.unwrap_or(100);
+        check_range("max_results", u64::from(max_results), 1, 100).map_err(ErrorData::from)?;
+
         let include_done = p.include_done.unwrap_or(false);
         let effective_jql = build_effective_jql(p.jql.as_deref(), include_done);
 
         let (raw_issues, truncated): (Vec<Value>, bool) = if scope == "backlog" {
             jira.paginate_board_endpoint(p.board_id, "backlog", effective_jql.as_deref())
                 .await
-                .map_err(|e| ErrorData::internal_error(e, None))?
+                .map_err(ErrorData::from)?
         } else if scope == "all" {
             jira.paginate_board_endpoint(p.board_id, "issue", effective_jql.as_deref())
                 .await
-                .map_err(|e| ErrorData::internal_error(e, None))?
+                .map_err(ErrorData::from)?
         } else {
             let (board_raw, board_truncated) = jira
                 .paginate_board_endpoint(p.board_id, "issue", effective_jql.as_deref())
                 .await
-                .map_err(|e| ErrorData::internal_error(e, None))?;
+                .map_err(ErrorData::from)?;
             let (backlog_raw, backlog_truncated) = jira
                 .paginate_board_endpoint(p.board_id, "backlog", effective_jql.as_deref())
                 .await
-                .map_err(|e| ErrorData::internal_error(e, None))?;
+                .map_err(ErrorData::from)?;
             if board_truncated || backlog_truncated {
                 return Err(ErrorData::internal_error(
                     format!(
@@ -1087,7 +1104,7 @@ impl AtlassianMcp {
 
         let total = raw_issues.len();
         let start_at = p.start_at.unwrap_or(0) as usize;
-        let max = p.max_results.unwrap_or(100).clamp(1, 100) as usize;
+        let max = max_results as usize;
         let page: Vec<Value> = raw_issues
             .into_iter()
             .skip(start_at)
@@ -1120,7 +1137,7 @@ impl AtlassianMcp {
         let jira = JiraClient::new(self.http.clone(), &creds);
         jira.move_issues_to_board(p.board_id, &issue_keys)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         let out = serde_json::json!({
             "moved_to": "board",
@@ -1145,7 +1162,7 @@ impl AtlassianMcp {
         let jira = JiraClient::new(self.http.clone(), &creds);
         jira.move_issues_to_backlog(p.board_id, &issue_keys)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         let out = serde_json::json!({
             "moved_to": "backlog",
@@ -1176,7 +1193,7 @@ impl AtlassianMcp {
                 p.next_page_token.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1196,7 +1213,7 @@ impl AtlassianMcp {
         let value = jira
             .search_users(&p.query, p.max_results)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1216,7 +1233,7 @@ impl AtlassianMcp {
         let value = jira
             .list_attachments(&p.issue_key)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1235,7 +1252,7 @@ impl AtlassianMcp {
         let file_bytes = base64::engine::general_purpose::STANDARD
             .decode(&p.file_base64)
             .map_err(|e| {
-                ErrorData::invalid_request(format!("Invalid base64 in file_base64: {e}"), None)
+                ErrorData::invalid_params(format!("Invalid base64 in file_base64: {e}"), None)
             })?;
 
         let creds = Self::resolve(&parts)?;
@@ -1243,7 +1260,7 @@ impl AtlassianMcp {
         let value = jira
             .add_attachment(&p.issue_key, &p.filename, file_bytes)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1262,11 +1279,15 @@ impl AtlassianMcp {
         let issue_key = p.issue_key.trim().to_string();
         let filename = p.filename.trim().to_string();
         if issue_key.is_empty() || filename.is_empty() {
-            return Err(ErrorData::invalid_request(
+            return Err(ErrorData::invalid_params(
                 "issue_key and filename must not be empty",
                 None,
             ));
         }
+        let ttl_seconds = p.ttl_seconds.unwrap_or(upload::DEFAULT_TTL.as_secs());
+        check_range("ttl_seconds", ttl_seconds, 1, upload::MAX_TTL.as_secs())
+            .map_err(ErrorData::from)?;
+        let ttl = std::time::Duration::from_secs(ttl_seconds);
         let origin =
             upload::public_origin(self.public_url.as_deref(), &parts.headers).ok_or_else(|| {
                 ErrorData::internal_error(
@@ -1274,11 +1295,6 @@ impl AtlassianMcp {
                     None,
                 )
             })?;
-        let ttl = std::time::Duration::from_secs(
-            p.ttl_seconds
-                .unwrap_or(upload::DEFAULT_TTL.as_secs())
-                .clamp(1, upload::MAX_TTL.as_secs()),
-        );
         let token = self
             .tickets
             .issue(creds, issue_key.clone(), filename.clone(), ttl);
@@ -1315,7 +1331,7 @@ impl AtlassianMcp {
         let value = jira
             .delete_attachment(&p.attachment_id)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1335,7 +1351,7 @@ impl AtlassianMcp {
         let value = cf
             .search_cql(&p.cql, p.limit)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1352,10 +1368,7 @@ impl AtlassianMcp {
     ) -> Result<String, ErrorData> {
         let creds = Self::resolve(&parts)?;
         let cf = ConfluenceClient::new(self.http.clone(), &creds);
-        let value = cf
-            .get_page(&p.page_id)
-            .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+        let value = cf.get_page(&p.page_id).await.map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1382,7 +1395,7 @@ impl AtlassianMcp {
                 &p.status,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
 
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1407,7 +1420,7 @@ impl AtlassianMcp {
                 p.role.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1426,7 +1439,7 @@ impl AtlassianMcp {
         let value = bb
             .get_repository(bb_workspace_override(&p.workspace), &p.repo_slug)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1451,7 +1464,7 @@ impl AtlassianMcp {
                 p.name_filter.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1477,7 +1490,7 @@ impl AtlassianMcp {
                 p.q.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1503,7 +1516,7 @@ impl AtlassianMcp {
                 p.sort.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1526,7 +1539,7 @@ impl AtlassianMcp {
                 p.pull_request_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1554,7 +1567,7 @@ impl AtlassianMcp {
                 p.reviewers.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1579,7 +1592,7 @@ impl AtlassianMcp {
                 p.description.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1602,7 +1615,7 @@ impl AtlassianMcp {
                 p.pull_request_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         let value = serde_json::json!({ "diff": diff });
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -1628,7 +1641,7 @@ impl AtlassianMcp {
                 p.page,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1653,7 +1666,7 @@ impl AtlassianMcp {
                 p.page,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1677,7 +1690,7 @@ impl AtlassianMcp {
                 p.comment_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1704,7 +1717,7 @@ impl AtlassianMcp {
                 p.inline_to,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1731,7 +1744,7 @@ impl AtlassianMcp {
                 None,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1756,7 +1769,7 @@ impl AtlassianMcp {
                 &p.content,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1780,7 +1793,7 @@ impl AtlassianMcp {
                 p.comment_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1808,7 +1821,7 @@ impl AtlassianMcp {
                 p.ctx.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1827,7 +1840,7 @@ impl AtlassianMcp {
         let value = bb
             .get_commit(bb_workspace_override(&p.workspace), &p.repo_slug, &p.commit)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1850,7 +1863,7 @@ impl AtlassianMcp {
             &p.path,
         )
         .await
-        .map_err(|e| ErrorData::internal_error(e, None))
+        .map_err(ErrorData::from)
     }
 
     #[tool(
@@ -1874,7 +1887,7 @@ impl AtlassianMcp {
                 p.page.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1899,7 +1912,7 @@ impl AtlassianMcp {
                 p.page,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1922,7 +1935,7 @@ impl AtlassianMcp {
                 p.pull_request_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1945,7 +1958,7 @@ impl AtlassianMcp {
                 p.pull_request_id,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1969,7 +1982,7 @@ impl AtlassianMcp {
                 p.message.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -1995,7 +2008,7 @@ impl AtlassianMcp {
                 p.message.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2019,7 +2032,7 @@ impl AtlassianMcp {
                 p.page,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2047,7 +2060,7 @@ impl AtlassianMcp {
                 p.raw,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2071,7 +2084,7 @@ impl AtlassianMcp {
                 p.raw,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2095,7 +2108,7 @@ impl AtlassianMcp {
                 p.raw,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2120,7 +2133,7 @@ impl AtlassianMcp {
                 p.tail_chars,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2147,7 +2160,7 @@ impl AtlassianMcp {
                 p.variables.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2170,7 +2183,7 @@ impl AtlassianMcp {
                 &p.pipeline,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2197,7 +2210,7 @@ impl AtlassianMcp {
                 p.sort.as_deref(),
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2216,7 +2229,7 @@ impl AtlassianMcp {
         let value = bb
             .list_environments(bb_workspace_override(&p.workspace), &p.repo_slug, p.raw)
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2243,7 +2256,7 @@ impl AtlassianMcp {
                 p.page,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2269,7 +2282,7 @@ impl AtlassianMcp {
                 p.secured,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2296,7 +2309,7 @@ impl AtlassianMcp {
                 p.secured,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
@@ -2320,7 +2333,7 @@ impl AtlassianMcp {
                 &p.variable,
             )
             .await
-            .map_err(|e| ErrorData::internal_error(e, None))?;
+            .map_err(ErrorData::from)?;
         serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }

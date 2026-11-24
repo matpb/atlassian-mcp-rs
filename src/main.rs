@@ -2,6 +2,7 @@ mod bitbucket;
 mod config;
 mod confluence;
 mod credentials;
+mod error;
 mod jira;
 mod mcp;
 mod upload;

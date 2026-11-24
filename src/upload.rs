@@ -136,7 +136,7 @@ pub async fn handle_upload(
             value.to_string(),
         )
             .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 

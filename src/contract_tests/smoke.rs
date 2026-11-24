@@ -180,3 +180,73 @@ async fn resources_and_prompts_are_not_advertised() {
         assert_eq!(resp["error"]["code"], -32601, "{method}: {resp:#}");
     }
 }
+
+#[tokio::test]
+async fn input_errors_are_32602_and_upstream_errors_are_32603_across_products() {
+    let mcp = Mcp::start().await;
+
+    let jira = mcp
+        .call_err("jira_get_issue", json!({"issue_key": "   "}))
+        .await;
+    assert_eq!(jira["code"], -32602);
+    assert_eq!(jira["message"], "issue_key must not be empty");
+
+    let confluence = mcp
+        .call_err("confluence_search", json!({"cql": "   "}))
+        .await;
+    assert_eq!(confluence["code"], -32602);
+    assert_eq!(confluence["message"], "cql must not be empty");
+
+    let bitbucket = mcp
+        .call_err("bitbucket_get_repository", json!({"repo_slug": "  "}))
+        .await;
+    assert_eq!(bitbucket["code"], -32602);
+    assert_eq!(bitbucket["message"], "repo_slug must not be empty");
+    assert!(mcp.fake.requests().is_empty());
+
+    mcp.fake.on(
+        "GET",
+        "/rest/api/3/issue/SWS-1",
+        500,
+        json!({"errorMessages": ["boom"]}),
+    );
+    mcp.fake.on(
+        "GET",
+        "/wiki/rest/api/content/123",
+        500,
+        json!({"message": "boom"}),
+    );
+    mcp.fake.on(
+        "GET",
+        "/2.0/repositories/ws/r",
+        500,
+        json!({"error": {"message": "boom"}}),
+    );
+
+    let jira = mcp
+        .call_err("jira_get_issue", json!({"issue_key": "SWS-1"}))
+        .await;
+    assert_eq!(jira["code"], -32603);
+    assert_eq!(
+        jira["message"],
+        r#"Jira returned 500 Internal Server Error: {"errorMessages":["boom"]}"#
+    );
+
+    let confluence = mcp
+        .call_err("confluence_get_page", json!({"page_id": "123"}))
+        .await;
+    assert_eq!(confluence["code"], -32603);
+    assert_eq!(
+        confluence["message"],
+        r#"Confluence returned 500 Internal Server Error: {"message":"boom"}"#
+    );
+
+    let bitbucket = mcp
+        .call_err("bitbucket_get_repository", json!({"repo_slug": "r"}))
+        .await;
+    assert_eq!(bitbucket["code"], -32603);
+    assert_eq!(
+        bitbucket["message"],
+        r#"Bitbucket returned 500 Internal Server Error: {"error":{"message":"boom"}}"#
+    );
+}

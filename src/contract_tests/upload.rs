@@ -156,7 +156,7 @@ async fn upload_url_tool_rejects_blank_filename() {
             json!({"issue_key": "SWS-1", "filename": "   "}),
         )
         .await;
-    assert_eq!(err["code"], -32600);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "issue_key and filename must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }

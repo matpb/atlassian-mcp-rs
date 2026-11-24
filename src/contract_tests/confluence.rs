@@ -132,7 +132,7 @@ async fn confluence_search_numeric_id_and_blank_body() {
 }
 
 #[tokio::test]
-async fn confluence_search_clamps_limit_to_1_through_100() {
+async fn confluence_search_limit_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     mcp.fake
         .on("GET", "/wiki/rest/api/search", 200, json!({"results": []}));
@@ -140,17 +140,32 @@ async fn confluence_search_clamps_limit_to_1_through_100() {
     let high = mcp
         .call(
             "confluence_search",
-            json!({"cql": "type = page", "limit": 500}),
+            json!({"cql": "type = page", "limit": 100}),
         )
         .await;
     let low = mcp
         .call(
             "confluence_search",
-            json!({"cql": "type = page", "limit": 0}),
+            json!({"cql": "type = page", "limit": 1}),
         )
         .await;
     assert_eq!(high, json!({"size": null, "limit": 100, "results": []}));
     assert_eq!(low, json!({"size": null, "limit": 1, "results": []}));
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err(
+                "confluence_search",
+                json!({"cql": "type = page", "limit": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("limit must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 2);
 
     let sent: Vec<Vec<(String, String)>> = mcp
         .fake
@@ -174,7 +189,7 @@ async fn confluence_search_empty_cql_is_rejected_before_any_request() {
     let err = mcp
         .call_err("confluence_search", json!({"cql": "   "}))
         .await;
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(err["message"], "cql must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
@@ -444,7 +459,7 @@ async fn confluence_create_page_unknown_body_format_is_rejected() {
             json!({"space_id": "98765", "title": "Notes", "body": "x", "body_format": "markdown"}),
         )
         .await;
-    assert_eq!(err["code"], -32603);
+    assert_eq!(err["code"], -32602);
     assert_eq!(
         err["message"],
         r#"body_format must be "storage" or "wiki", got "markdown""#
@@ -522,4 +537,17 @@ async fn confluence_site_override_header_sends_wiki_calls_to_second_host() {
 
     assert!(mcp.fake.requests().is_empty());
     assert_eq!(wiki.only_request().path, PAGE_PATH);
+}
+
+#[tokio::test]
+async fn confluence_create_page_validates_before_space_lookup() {
+    let mcp = Mcp::start().await;
+    for args in [
+        json!({"space_id": "DOCS", "title": "  ", "body": "x"}),
+        json!({"space_id": "DOCS", "title": "Notes", "body": "x", "body_format": "markdown"}),
+    ] {
+        let err = mcp.call_err("confluence_create_page", args).await;
+        assert_eq!(err["code"], -32602);
+    }
+    assert!(mcp.fake.requests().is_empty());
 }

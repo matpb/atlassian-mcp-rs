@@ -5,6 +5,7 @@ use reqwest::multipart;
 use serde_json::{Value, json};
 
 use crate::credentials::AtlassianCredentials;
+use crate::error::{ClientError, ClientResult, check_range};
 
 const COMMENT_PAGE_SIZE: u32 = 100;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -29,22 +30,22 @@ impl JiraClient {
         }
     }
 
-    pub fn build_http_client() -> Result<Client, String> {
+    pub fn build_http_client() -> ClientResult<Client> {
         Client::builder()
             .timeout(HTTP_TIMEOUT)
             .user_agent(concat!("atlassian-mcp/", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| e.to_string())
+            .map_err(|e| ClientError::upstream(e.to_string()))
     }
 
     pub async fn get_issue_for_ai(
         &self,
         issue_key: &str,
         include_adf: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let enc = encode_path_segment(key);
@@ -64,7 +65,7 @@ impl JiraClient {
         let fields = issue
             .get("fields")
             .and_then(|f| f.as_object())
-            .ok_or_else(|| "Jira issue response missing fields".to_string())?;
+            .ok_or_else(|| ClientError::upstream("Jira issue response missing fields"))?;
 
         let summary = fields
             .get("summary")
@@ -148,14 +149,10 @@ impl JiraClient {
         Ok(out)
     }
 
-    pub async fn add_comment_with_body(
-        &self,
-        issue_key: &str,
-        body: Value,
-    ) -> Result<Value, String> {
+    pub async fn add_comment_with_body(&self, issue_key: &str, body: Value) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!(
@@ -172,10 +169,10 @@ impl JiraClient {
         &self,
         issue_key: &str,
         description: Value,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!("{}/issue/{}", self.api_root, encode_path_segment(key));
@@ -189,10 +186,10 @@ impl JiraClient {
     }
 
     /// Replace the issue summary (`PUT /rest/api/3/issue/{key}`).
-    pub async fn update_summary(&self, issue_key: &str, summary: &str) -> Result<Value, String> {
+    pub async fn update_summary(&self, issue_key: &str, summary: &str) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!("{}/issue/{}", self.api_root, encode_path_segment(key));
@@ -208,18 +205,18 @@ impl JiraClient {
         issue_type_name: &str,
         summary: &str,
         description: Option<Value>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let project_key = project_key.trim();
         if project_key.is_empty() {
-            return Err("project_key must not be empty".into());
+            return Err(ClientError::invalid("project_key must not be empty"));
         }
         let issue_type_name = issue_type_name.trim();
         if issue_type_name.is_empty() {
-            return Err("issue_type must not be empty".into());
+            return Err(ClientError::invalid("issue_type must not be empty"));
         }
         let summary = summary.trim();
         if summary.is_empty() {
-            return Err("summary must not be empty".into());
+            return Err(ClientError::invalid("summary must not be empty"));
         }
 
         let url = format!("{}/issue", self.api_root);
@@ -244,12 +241,13 @@ impl JiraClient {
         start_at: u32,
         fields: Option<&[String]>,
         next_page_token: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let jql = jql.trim();
         if jql.is_empty() {
-            return Err("jql must not be empty".into());
+            return Err(ClientError::invalid("jql must not be empty"));
         }
-        let max = max_results.clamp(1, 100);
+        check_range("max_results", u64::from(max_results), 1, 100)?;
+        let max = max_results;
         let url = format!("{}/search/jql", self.api_root);
 
         if fields.is_some() || next_page_token.is_some() {
@@ -258,7 +256,7 @@ impl JiraClient {
             let raw = self
                 .post_json(&url, &body)
                 .await
-                .map_err(|e| format!("Jira search/jql failed: {e}"))?;
+                .map_err(|e| e.context("Jira search/jql failed: "))?;
             return Ok(shape_cursor_response(&raw, max, fields.is_some()));
         }
 
@@ -299,7 +297,7 @@ impl JiraClient {
             let raw = self
                 .post_json(&url, &Value::Object(body))
                 .await
-                .map_err(|e| format!("Jira search/jql failed: {e}"))?;
+                .map_err(|e| e.context("Jira search/jql failed: "))?;
 
             let issues = raw
                 .get("issues")
@@ -366,8 +364,9 @@ impl JiraClient {
         project_key: Option<&str>,
         max_results: u32,
         start_at: u32,
-    ) -> Result<Value, String> {
-        let max = max_results.clamp(1, 50);
+    ) -> ClientResult<Value> {
+        check_range("max_results", u64::from(max_results), 1, 50)?;
+        let max = max_results;
         let mut url = format!(
             "{}/board?maxResults={}&startAt={}",
             self.agile_root, max, start_at
@@ -388,7 +387,7 @@ impl JiraClient {
         board_id: u64,
         endpoint: &str,
         jql: Option<&str>,
-    ) -> Result<(Vec<Value>, bool), String> {
+    ) -> ClientResult<(Vec<Value>, bool)> {
         const PAGE_SIZE: u32 = 100;
         const MAX_PAGES: u32 = 50;
 
@@ -437,7 +436,7 @@ impl JiraClient {
         &self,
         board_id: u64,
         issue_keys: &[String],
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let url = format!("{}/board/{}/issue", self.agile_root, board_id);
         let payload = json!({ "issues": issue_keys });
         self.post_json_no_content(&url, &payload).await
@@ -449,47 +448,47 @@ impl JiraClient {
         &self,
         board_id: u64,
         issue_keys: &[String],
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let url = format!("{}/backlog/{}/issue", self.agile_root, board_id);
         let payload = json!({ "issues": issue_keys });
         self.post_json_no_content(&url, &payload).await
     }
 
     /// Search for Jira users by name or email. Returns accountId (needed for ADF mentions), displayName, emailAddress, and active status.
-    pub async fn search_users(&self, query: &str, max_results: u32) -> Result<Value, String> {
+    pub async fn search_users(&self, query: &str, max_results: u32) -> ClientResult<Value> {
         let query = query.trim();
         if query.is_empty() {
-            return Err("query must not be empty".into());
+            return Err(ClientError::invalid("query must not be empty"));
         }
 
+        check_range("max_results", u64::from(max_results), 1, 50)?;
         let url = format!("{}/user/search", self.api_root);
         let response = self
             .http
             .get(&url)
             .basic_auth(&self.email, Some(&self.token))
             .header("Accept", "application/json")
-            .query(&[
-                ("query", query),
-                ("maxResults", &max_results.clamp(1, 50).to_string()),
-            ])
+            .query(&[("query", query), ("maxResults", &max_results.to_string())])
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
-        let users: Value =
-            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))?;
+        let users: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))?;
 
         let slimmed = users
             .as_array()
@@ -515,10 +514,10 @@ impl JiraClient {
     }
 
     /// List attachments on a Jira issue.
-    pub async fn list_attachments(&self, issue_key: &str) -> Result<Value, String> {
+    pub async fn list_attachments(&self, issue_key: &str) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!(
@@ -552,14 +551,14 @@ impl JiraClient {
         issue_key: &str,
         filename: &str,
         file_bytes: Vec<u8>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
         let filename = filename.trim();
         if filename.is_empty() {
-            return Err("filename must not be empty".into());
+            return Err(ClientError::invalid("filename must not be empty"));
         }
 
         let url = format!(
@@ -571,7 +570,7 @@ impl JiraClient {
         let part = multipart::Part::bytes(file_bytes)
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")
-            .map_err(|e| format!("Invalid MIME type: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Invalid MIME type: {e}")))?;
 
         let form = multipart::Form::new().part("file", part);
 
@@ -584,22 +583,24 @@ impl JiraClient {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| format!("Jira attachment upload failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira attachment upload failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
-        let attachments: Value =
-            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))?;
+        let attachments: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))?;
 
         // Jira returns an array of created attachments; slim them down
         let slimmed = attachments
@@ -618,10 +619,10 @@ impl JiraClient {
     }
 
     /// Delete a Jira attachment by its ID.
-    pub async fn delete_attachment(&self, attachment_id: &str) -> Result<Value, String> {
+    pub async fn delete_attachment(&self, attachment_id: &str) -> ClientResult<Value> {
         let id = attachment_id.trim();
         if id.is_empty() {
-            return Err("attachment_id must not be empty".into());
+            return Err(ClientError::invalid("attachment_id must not be empty"));
         }
 
         let url = format!("{}/attachment/{}", self.api_root, encode_path_segment(id));
@@ -632,7 +633,7 @@ impl JiraClient {
             .basic_auth(&self.email, Some(&self.token))
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
@@ -640,19 +641,21 @@ impl JiraClient {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+                .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
         Ok(json!({ "ok": true }))
     }
 
     /// List available transitions for a Jira issue.
-    pub async fn get_transitions(&self, issue_key: &str) -> Result<Value, String> {
+    pub async fn get_transitions(&self, issue_key: &str) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!(
@@ -693,12 +696,13 @@ impl JiraClient {
         field: Option<&str>,
         max_results: u32,
         start_at: u32,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
-        let max = max_results.clamp(1, 100) as usize;
+        check_range("max_results", u64::from(max_results), 1, 100)?;
+        let max = max_results as usize;
         let field_filter = field.map(|f| f.trim().to_ascii_lowercase());
 
         const PAGE_SIZE: u32 = 100;
@@ -802,10 +806,10 @@ impl JiraClient {
         &self,
         issue_key: &str,
         account_id: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
 
         let url = format!(
@@ -827,14 +831,14 @@ impl JiraClient {
         &self,
         issue_key: &str,
         transition_id: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = issue_key.trim();
         if key.is_empty() {
-            return Err("issue_key must not be empty".into());
+            return Err(ClientError::invalid("issue_key must not be empty"));
         }
         let tid = transition_id.trim();
         if tid.is_empty() {
-            return Err("transition_id must not be empty".into());
+            return Err(ClientError::invalid("transition_id must not be empty"));
         }
 
         let url = format!(
@@ -850,7 +854,7 @@ impl JiraClient {
     }
 
     /// POST that accepts 204 No Content (used by transitions endpoint).
-    async fn post_json_no_content(&self, url: &str, payload: &Value) -> Result<Value, String> {
+    async fn post_json_no_content(&self, url: &str, payload: &Value) -> ClientResult<Value> {
         let response = self
             .http
             .post(url)
@@ -860,28 +864,31 @@ impl JiraClient {
             .json(payload)
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
         if bytes.is_empty() {
             return Ok(json!({ "ok": true }));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))
     }
 
-    async fn get_json(&self, url: &str) -> Result<Value, String> {
+    async fn get_json(&self, url: &str) -> ClientResult<Value> {
         let response = self
             .http
             .get(url)
@@ -889,24 +896,27 @@ impl JiraClient {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))
     }
 
-    async fn post_json(&self, url: &str, payload: &Value) -> Result<Value, String> {
+    async fn post_json(&self, url: &str, payload: &Value) -> ClientResult<Value> {
         let response = self
             .http
             .post(url)
@@ -916,24 +926,27 @@ impl JiraClient {
             .json(payload)
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))
     }
 
-    async fn put_json(&self, url: &str, payload: &Value) -> Result<Value, String> {
+    async fn put_json(&self, url: &str, payload: &Value) -> ClientResult<Value> {
         let response = self
             .http
             .put(url)
@@ -943,18 +956,20 @@ impl JiraClient {
             .json(payload)
             .send()
             .await
-            .map_err(|e| format!("Jira request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Jira request failed: {e}")))?;
         check_login(response.headers())?;
 
         let status = response.status();
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| format!("Failed to read Jira response: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Failed to read Jira response: {e}")))?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Jira returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Jira returned {status}: {msg}"
+            )));
         }
 
         // PUT may return empty body on success
@@ -962,7 +977,8 @@ impl JiraClient {
             return Ok(json!({ "ok": true }));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Jira: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Jira: {e}")))
     }
 }
 
@@ -988,7 +1004,7 @@ fn search_jql_cursor_body(
     max: u32,
     fields: Option<&[String]>,
     token: Option<&str>,
-) -> Result<Value, String> {
+) -> ClientResult<Value> {
     let fields: Vec<String> = match fields {
         None => [
             "key",
@@ -1009,14 +1025,14 @@ fn search_jql_cursor_body(
                 .map(str::to_string)
                 .collect();
             if kept.is_empty() {
-                return Err("fields must list at least one field".into());
+                return Err(ClientError::invalid("fields must list at least one field"));
             }
             kept
         }
     };
     let mut body = json!({
         "jql": jql,
-        "maxResults": max.clamp(1, 100),
+        "maxResults": max,
         "fields": fields,
     });
     if let Some(t) = token.filter(|t| !t.trim().is_empty()) {
@@ -1038,23 +1054,22 @@ fn login_failure(reason: Option<&str>) -> Option<String> {
 }
 
 /// Runs before the status check, so a failed login is never reported as a missing issue.
-fn check_login(headers: &reqwest::header::HeaderMap) -> Result<(), String> {
+fn check_login(headers: &reqwest::header::HeaderMap) -> ClientResult<()> {
     let reason = headers
         .get("X-Seraph-LoginReason")
         .and_then(|v| v.to_str().ok());
     match login_failure(reason) {
-        Some(err) => Err(err),
+        Some(err) => Err(ClientError::upstream(err)),
         None => Ok(()),
     }
 }
 
 /// Cursor mode pages by `nextPageToken` only, so `start_at` must be 0.
-fn check_cursor_start_at(start_at: u32) -> Result<(), String> {
+fn check_cursor_start_at(start_at: u32) -> ClientResult<()> {
     if start_at > 0 {
-        return Err(
-            "start_at cannot be combined with fields or next_page_token; page with next_page_token"
-                .into(),
-        );
+        return Err(ClientError::invalid(
+            "start_at cannot be combined with fields or next_page_token; page with next_page_token",
+        ));
     }
     Ok(())
 }
@@ -1251,56 +1266,62 @@ fn encode_path_segment(key: &str) -> String {
 
 /// Parse a user-supplied JSON string as a Jira/Confluence **Atlassian Document Format** root document.
 /// Expects `{"type":"doc","version":1,"content":[...]}` (same shape Jira REST API v3 uses for description and comments).
-pub fn parse_adf_document_json(text: &str) -> Result<Value, String> {
+pub fn parse_adf_document_json(text: &str) -> ClientResult<Value> {
     let text = text.trim();
     if text.is_empty() {
-        return Err("ADF document JSON must not be empty".into());
+        return Err(ClientError::invalid("ADF document JSON must not be empty"));
     }
-    let v: Value =
-        serde_json::from_str(text).map_err(|e| format!("invalid JSON for ADF document: {e}"))?;
+    let v: Value = serde_json::from_str(text)
+        .map_err(|e| ClientError::invalid(format!("invalid JSON for ADF document: {e}")))?;
     let obj = v
         .as_object()
-        .ok_or_else(|| "ADF document root must be a JSON object".to_string())?;
+        .ok_or_else(|| ClientError::invalid("ADF document root must be a JSON object"))?;
     let ty = obj
         .get("type")
         .and_then(|t| t.as_str())
-        .ok_or_else(|| "ADF document must have string field \"type\"".to_string())?;
+        .ok_or_else(|| ClientError::invalid("ADF document must have string field \"type\""))?;
     if ty != "doc" {
-        return Err(format!(
+        return Err(ClientError::invalid(format!(
             "ADF document \"type\" must be \"doc\" (Jira Cloud REST v3), got {ty:?}"
-        ));
+        )));
     }
     if !obj.contains_key("version") {
-        return Err("ADF document must include \"version\" (use 1 with Jira Cloud REST v3)".into());
+        return Err(ClientError::invalid(
+            "ADF document must include \"version\" (use 1 with Jira Cloud REST v3)",
+        ));
     }
     if obj.get("version").and_then(|x| x.as_u64()).is_none()
         && obj.get("version").and_then(|x| x.as_i64()).is_none()
     {
-        return Err("ADF document \"version\" must be a number".into());
+        return Err(ClientError::invalid(
+            "ADF document \"version\" must be a number",
+        ));
     }
     Ok(v)
 }
 
 /// Build an ADF document from tool input: `plain` wraps lines as paragraphs; `adf` parses full ADF JSON.
-pub fn document_from_content_format(content_format: &str, text: &str) -> Result<Value, String> {
+pub fn document_from_content_format(content_format: &str, text: &str) -> ClientResult<Value> {
     match content_format.trim().to_ascii_lowercase().as_str() {
         "plain" => {
             if text.trim().is_empty() {
-                return Err("body text must not be empty when content_format is \"plain\"".into());
+                return Err(ClientError::invalid(
+                    "body text must not be empty when content_format is \"plain\"",
+                ));
             }
             Ok(plain_text_to_adf(text))
         }
         "adf" => parse_adf_document_json(text),
-        other => Err(format!(
+        other => Err(ClientError::invalid(format!(
             "content_format must be \"plain\" or \"adf\", got {other:?}"
-        )),
+        ))),
     }
 }
 
-fn summary_payload(summary: &str) -> Result<Value, String> {
+fn summary_payload(summary: &str) -> ClientResult<Value> {
     let trimmed = summary.trim();
     if trimmed.is_empty() {
-        return Err("summary must not be empty".into());
+        return Err(ClientError::invalid("summary must not be empty"));
     }
     Ok(json!({ "fields": { "summary": trimmed } }))
 }
@@ -1368,7 +1389,7 @@ mod tests {
     #[test]
     fn summary_payload_rejects_blank() {
         let err = summary_payload("   ").unwrap_err();
-        assert!(err.contains("summary"));
+        assert_eq!(err, ClientError::invalid("summary must not be empty"));
     }
 
     #[test]
@@ -1420,7 +1441,12 @@ mod tests {
     #[test]
     fn parse_adf_document_json_rejects_wrong_type() {
         let err = parse_adf_document_json(r#"{"type":"paragraph","version":1}"#).unwrap_err();
-        assert!(err.contains("doc"));
+        assert_eq!(
+            err,
+            ClientError::invalid(
+                "ADF document \"type\" must be \"doc\" (Jira Cloud REST v3), got \"paragraph\""
+            )
+        );
     }
 
     #[test]
@@ -1446,7 +1472,7 @@ mod tests {
             "".to_string(),
         ];
         let body =
-            search_jql_cursor_body("project = SIOS", 500, Some(fields.as_slice()), Some("tok"))
+            search_jql_cursor_body("project = SIOS", 100, Some(fields.as_slice()), Some("tok"))
                 .unwrap();
         assert_eq!(
             body,
@@ -1474,11 +1500,11 @@ mod tests {
         let blank = vec!["  ".to_string()];
         assert_eq!(
             search_jql_cursor_body("x", 5, Some(empty.as_slice()), None),
-            Err("fields must list at least one field".to_string())
+            Err(ClientError::invalid("fields must list at least one field"))
         );
         assert_eq!(
             search_jql_cursor_body("x", 5, Some(blank.as_slice()), None),
-            Err("fields must list at least one field".to_string())
+            Err(ClientError::invalid("fields must list at least one field"))
         );
     }
 
@@ -1487,10 +1513,9 @@ mod tests {
         assert_eq!(check_cursor_start_at(0), Ok(()));
         assert_eq!(
             check_cursor_start_at(1),
-            Err(
-                "start_at cannot be combined with fields or next_page_token; page with next_page_token"
-                    .to_string()
-            )
+            Err(ClientError::invalid(
+                "start_at cannot be combined with fields or next_page_token; page with next_page_token",
+            ))
         );
     }
 

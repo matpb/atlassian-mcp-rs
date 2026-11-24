@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::credentials::BitbucketCredentials;
+use crate::error::{ClientError, ClientResult, check_range};
 
 #[derive(Clone)]
 pub struct BitbucketClient {
@@ -30,7 +31,7 @@ impl BitbucketClient {
         o.unwrap_or(self.workspace.as_str())
     }
 
-    fn repo_root(&self, workspace: &str, repo_slug: &str) -> Result<String, String> {
+    fn repo_root(&self, workspace: &str, repo_slug: &str) -> ClientResult<String> {
         let repo = require_non_empty(repo_slug, "repo_slug")?;
         Ok(format!(
             "{}/repositories/{}/{}",
@@ -48,7 +49,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         role: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let ws = self.workspace(workspace_override);
         let url = format!("{}/repositories/{}", self.api_root, encode_path_segment(ws));
         let mut req = self
@@ -57,7 +58,8 @@ impl BitbucketClient {
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -72,7 +74,7 @@ impl BitbucketClient {
         &self,
         workspace_override: Option<&str>,
         repo_slug: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let url = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let req = self
             .http
@@ -89,7 +91,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         name_filter: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/refs/branches");
         let mut req = self
@@ -98,7 +100,8 @@ impl BitbucketClient {
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -119,7 +122,7 @@ impl BitbucketClient {
         page: Option<u32>,
         sort: Option<&str>,
         q: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let req = self.list_tags_request(workspace_override, repo_slug, pagelen, page, sort, q)?;
         self.send_json_request(req).await
     }
@@ -132,13 +135,13 @@ impl BitbucketClient {
         page: Option<u32>,
         sort: Option<&str>,
         q: Option<&str>,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let req = Self::paged(
             self.authed(self.http.get(format!("{base}/refs/tags"))),
             pagelen,
             page,
-        );
+        )?;
         let req = query_nonblank(req, "sort", sort);
         Ok(query_nonblank(req, "q", q))
     }
@@ -153,7 +156,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         sort: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let req = self.list_pull_requests_request(
             workspace_override,
             repo_slug,
@@ -173,7 +176,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         sort: Option<&str>,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests");
         let mut req = self
@@ -185,7 +188,8 @@ impl BitbucketClient {
             req = req.query(&[("state", s)]);
         }
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -198,7 +202,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         pull_request_id: u32,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}");
         let req = self
@@ -220,7 +224,7 @@ impl BitbucketClient {
         dest_branch: &str,
         close_source_branch: bool,
         reviewers: Option<&[String]>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let title = require_non_empty(title, "title")?;
         let source_branch = require_non_empty(source_branch, "source_branch")?;
         let dest_branch = require_non_empty(dest_branch, "destination_branch")?;
@@ -271,10 +275,12 @@ impl BitbucketClient {
         pull_request_id: u32,
         title: Option<&str>,
         description: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let title = title.map(|t| require_non_empty(t, "title")).transpose()?;
         if title.is_none() && description.is_none() {
-            return Err("at least one of title or description must be provided".to_string());
+            return Err(ClientError::invalid(
+                "at least one of title or description must be provided",
+            ));
         }
 
         // Bitbucket's PUT replaces the fields it receives and resets the ones it doesn't, so
@@ -292,7 +298,9 @@ impl BitbucketClient {
             None => current
                 .get("title")
                 .and_then(Value::as_str)
-                .ok_or("could not read the current pull request title")?
+                .ok_or(ClientError::upstream(
+                    "could not read the current pull request title",
+                ))?
                 .to_string(),
         };
         body.insert("title".into(), json!(title));
@@ -310,9 +318,11 @@ impl BitbucketClient {
         if let Some(revs) = current.get("reviewers").and_then(Value::as_array) {
             let mut reviewers = Vec::with_capacity(revs.len());
             for r in revs {
-                let uuid = r.get("uuid").and_then(Value::as_str).ok_or(
-                    "a current reviewer has no uuid; refusing to update and drop reviewers",
-                )?;
+                let uuid = r.get("uuid").and_then(Value::as_str).ok_or_else(|| {
+                    ClientError::upstream(
+                        "a current reviewer has no uuid; refusing to update and drop reviewers",
+                    )
+                })?;
                 reviewers.push(json!({ "uuid": uuid }));
             }
             body.insert("reviewers".into(), json!(reviewers));
@@ -344,7 +354,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         pull_request_id: u32,
-    ) -> Result<String, String> {
+    ) -> ClientResult<String> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/diff");
         let response = self
@@ -357,16 +367,17 @@ impl BitbucketClient {
             )
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
 
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let text = response.text().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
 
         if !status.is_success() {
-            return Err(format!("Bitbucket returned {status}: {text}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {text}"
+            )));
         }
         Ok(text)
     }
@@ -378,7 +389,7 @@ impl BitbucketClient {
         pull_request_id: u32,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/diffstat");
         let mut req = self
@@ -387,7 +398,8 @@ impl BitbucketClient {
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -402,7 +414,7 @@ impl BitbucketClient {
         pull_request_id: u32,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/comments");
         let mut req = self
@@ -411,7 +423,8 @@ impl BitbucketClient {
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -425,7 +438,7 @@ impl BitbucketClient {
         repo_slug: &str,
         pull_request_id: u32,
         comment_id: u64,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/comments/{comment_id}");
         let req = self
@@ -446,7 +459,7 @@ impl BitbucketClient {
         parent_comment_id: Option<u64>,
         inline_path: Option<&str>,
         inline_to: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let content_raw = require_non_empty(content_raw, "content")?;
 
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
@@ -488,7 +501,7 @@ impl BitbucketClient {
         pull_request_id: u32,
         comment_id: u64,
         content_raw: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let content_raw = require_non_empty(content_raw, "content")?;
 
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
@@ -512,7 +525,7 @@ impl BitbucketClient {
         repo_slug: &str,
         pull_request_id: u32,
         comment_id: u64,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/comments/{comment_id}");
         let req = self
@@ -524,22 +537,24 @@ impl BitbucketClient {
         let response = req
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
 
         if status == reqwest::StatusCode::NO_CONTENT || bytes.is_empty() {
             return Ok(json!({ "ok": true, "deleted": true }));
         }
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Bitbucket returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {msg}"
+            )));
         }
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Bitbucket: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Bitbucket: {e}")))
     }
 
     // --- Files ---
@@ -550,22 +565,23 @@ impl BitbucketClient {
         repo_slug: &str,
         commit: &str,
         path: &str,
-    ) -> Result<String, String> {
+    ) -> ClientResult<String> {
         let response = self
             .get_file_request(workspace_override, repo_slug, commit, path)?
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
 
         if !status.is_success() {
-            return Err(format!("Bitbucket returned {status}: {text}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {text}"
+            )));
         }
         Ok(text)
     }
@@ -576,7 +592,7 @@ impl BitbucketClient {
         repo_slug: &str,
         commit: &str,
         path: &str,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!(
             "{base}/src/{}/{}",
@@ -598,7 +614,7 @@ impl BitbucketClient {
         path: &str,
         pagelen: Option<u32>,
         page: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let req =
             self.file_history_request(workspace_override, repo_slug, commit, path, pagelen, page)?;
         self.send_json_request(req).await
@@ -612,14 +628,14 @@ impl BitbucketClient {
         path: &str,
         pagelen: Option<u32>,
         page: Option<&str>,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!(
             "{base}/filehistory/{}/{}",
             commit_path_segment(commit)?,
             encode_file_path(path)?
         );
-        let req = Self::paged(self.authed(self.http.get(url)), pagelen, None);
+        let req = Self::paged(self.authed(self.http.get(url)), pagelen, None)?;
         Ok(query_nonblank(req, "page", page))
     }
 
@@ -636,7 +652,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         ctx: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let req = self.list_commits_request(
             workspace_override,
             repo_slug,
@@ -661,7 +677,7 @@ impl BitbucketClient {
         pagelen: Option<u32>,
         page: Option<u32>,
         ctx: Option<&str>,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let rev = revision.map(str::trim).filter(|s| !s.is_empty());
         let has_range = include.iter().chain(exclude).any(|v| !v.trim().is_empty());
@@ -677,7 +693,7 @@ impl BitbucketClient {
         for v in exclude {
             req = query_nonblank(req, "exclude", Some(v.as_str()));
         }
-        req = Self::paged(req, pagelen, page);
+        req = Self::paged(req, pagelen, page)?;
         Ok(query_nonblank(req, "ctx", ctx))
     }
 
@@ -686,7 +702,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         commit: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let commit = commit_path_segment(commit)?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/commit/{commit}");
@@ -705,7 +721,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         pull_request_id: u32,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/approve");
         let req = self
@@ -721,7 +737,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         pull_request_id: u32,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/approve");
         let req = self
@@ -738,7 +754,7 @@ impl BitbucketClient {
         repo_slug: &str,
         pull_request_id: u32,
         message: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/decline");
         let body = message
@@ -766,7 +782,7 @@ impl BitbucketClient {
         merge_strategy: Option<&str>,
         close_source_branch: Option<bool>,
         message: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/merge");
 
@@ -799,7 +815,7 @@ impl BitbucketClient {
         pull_request_id: u32,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pullrequests/{pull_request_id}/activity");
         let mut req = self
@@ -808,7 +824,8 @@ impl BitbucketClient {
             .basic_auth(&self.username, Some(&self.app_password));
         req = req.header("Accept", "application/json");
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -824,7 +841,7 @@ impl BitbucketClient {
         query: Option<&str>,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let ws = self.workspace(workspace_override);
         let url = format!(
             "{}/workspaces/{}/members",
@@ -844,7 +861,8 @@ impl BitbucketClient {
             )]);
         }
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
@@ -863,14 +881,15 @@ impl BitbucketClient {
         mut req: reqwest::RequestBuilder,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> reqwest::RequestBuilder {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         if let Some(n) = pagelen {
-            req = req.query(&[("pagelen", n.clamp(1, 100).to_string())]);
+            check_range("pagelen", u64::from(n), 1, 100)?;
+            req = req.query(&[("pagelen", n.to_string())]);
         }
         if let Some(p) = page {
             req = req.query(&[("page", p.to_string())]);
         }
-        req
+        Ok(req)
     }
 
     pub async fn list_pipelines(
@@ -881,13 +900,13 @@ impl BitbucketClient {
         page: Option<u32>,
         target_branch: Option<&str>,
         raw: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let req = self
             .authed(self.http.get(format!("{base}/pipelines")))
             .query(&[("sort", "-created_on")]);
         let value = self
-            .send_json_request(Self::paged(req, pagelen, page))
+            .send_json_request(Self::paged(req, pagelen, page)?)
             .await?;
         if raw {
             return Ok(value);
@@ -920,7 +939,7 @@ impl BitbucketClient {
         repo_slug: &str,
         pipeline: &str,
         raw: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let pipeline = require_non_empty(pipeline, "pipeline")?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pipelines/{}", encode_path_segment(&pipeline));
@@ -940,11 +959,11 @@ impl BitbucketClient {
         repo_slug: &str,
         pipeline: &str,
         raw: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let pipeline = require_non_empty(pipeline, "pipeline")?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!("{base}/pipelines/{}/steps", encode_path_segment(&pipeline));
-        let req = Self::paged(self.authed(self.http.get(url)), Some(100), None);
+        let req = Self::paged(self.authed(self.http.get(url)), Some(100), None)?;
         let value = self.send_json_request(req).await?;
         if raw {
             return Ok(value);
@@ -964,7 +983,7 @@ impl BitbucketClient {
         pipeline: &str,
         step_uuid: &str,
         tail_chars: Option<usize>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let pipeline = require_non_empty(pipeline, "pipeline")?;
         let step_uuid = require_non_empty(step_uuid, "step_uuid")?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
@@ -980,14 +999,15 @@ impl BitbucketClient {
             .header("Accept", "application/octet-stream, text/plain, */*;q=0.1")
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
         let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let text = response.text().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
         if !status.is_success() {
-            return Err(format!("Bitbucket returned {status}: {text}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {text}"
+            )));
         }
         let total_chars = text.chars().count();
         let keep = tail_chars.unwrap_or(20_000).max(1);
@@ -1016,14 +1036,14 @@ impl BitbucketClient {
         commit_hash: Option<&str>,
         custom_pipeline: Option<&str>,
         variables: Option<&[PipelineVariable]>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let ref_name = require_non_empty(ref_name, "ref_name")?;
         let ref_type = ref_type
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("branch");
         if ref_type != "branch" && ref_type != "tag" {
-            return Err("ref_type must be `branch` or `tag`".to_string());
+            return Err(ClientError::invalid("ref_type must be `branch` or `tag`"));
         }
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
 
@@ -1065,7 +1085,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         pipeline: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let pipeline = require_non_empty(pipeline, "pipeline")?;
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let url = format!(
@@ -1088,7 +1108,7 @@ impl BitbucketClient {
         raw: bool,
         environment: Option<&str>,
         sort: Option<&str>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let req = self.list_deployments_request(
             workspace_override,
             repo_slug,
@@ -1122,7 +1142,7 @@ impl BitbucketClient {
         page: Option<u32>,
         environment: Option<&str>,
         sort: Option<&str>,
-    ) -> Result<reqwest::RequestBuilder, String> {
+    ) -> ClientResult<reqwest::RequestBuilder> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let sort = sort
             .map(str::trim)
@@ -1132,7 +1152,7 @@ impl BitbucketClient {
             .authed(self.http.get(format!("{base}/deployments")))
             .query(&[("sort", sort)]);
         let req = query_nonblank(req, "environment", environment);
-        Ok(Self::paged(req, pagelen, page))
+        Self::paged(req, pagelen, page)
     }
 
     pub async fn list_environments(
@@ -1140,13 +1160,13 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         raw: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         let req = Self::paged(
             self.authed(self.http.get(format!("{base}/environments"))),
             Some(100),
             None,
-        );
+        )?;
         let value = self.send_json_request(req).await?;
         if raw {
             return Ok(value);
@@ -1177,7 +1197,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         environment: &str,
-    ) -> Result<String, String> {
+    ) -> ClientResult<String> {
         let wanted = require_non_empty(environment, "environment")?;
         if wanted.starts_with('{') {
             return Ok(wanted);
@@ -1205,13 +1225,13 @@ impl BitbucketClient {
                 .get("uuid")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .ok_or_else(|| "environment has no uuid".to_string()),
-            [] => Err(format!(
+                .ok_or_else(|| ClientError::upstream("environment has no uuid")),
+            [] => Err(ClientError::upstream(format!(
                 "no deployment environment named `{wanted}`; use bitbucket_list_deployment_environments"
-            )),
-            _ => Err(format!(
+            ))),
+            _ => Err(ClientError::upstream(format!(
                 "several deployment environments match `{wanted}`; pass the UUID instead"
-            )),
+            ))),
         }
     }
 
@@ -1222,7 +1242,7 @@ impl BitbucketClient {
         workspace_override: Option<&str>,
         repo_slug: &str,
         environment: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> ClientResult<String> {
         let base = self.repo_root(self.workspace(workspace_override), repo_slug)?;
         match environment.map(str::trim).filter(|s| !s.is_empty()) {
             None => Ok(format!("{base}/pipelines_config/variables")),
@@ -1245,11 +1265,14 @@ impl BitbucketClient {
         environment: Option<&str>,
         pagelen: Option<u32>,
         page: Option<u32>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
+        if let Some(n) = pagelen {
+            check_range("pagelen", u64::from(n), 1, 100)?;
+        }
         let root = self
             .variables_root(workspace_override, repo_slug, environment)
             .await?;
-        let req = Self::paged(self.authed(self.http.get(&root)), pagelen, page);
+        let req = Self::paged(self.authed(self.http.get(&root)), pagelen, page)?;
         let value = self.send_json_request(req).await?;
         let items: Vec<Value> = value
             .get("values")
@@ -1274,7 +1297,7 @@ impl BitbucketClient {
         key: &str,
         value: &str,
         secured: bool,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let key = require_non_empty(key, "key")?;
         let root = self
             .variables_root(workspace_override, repo_slug, environment)
@@ -1288,7 +1311,7 @@ impl BitbucketClient {
     }
 
     /// `variable` is a UUID (`{...}`) or a key name; scans the scope's variable pages.
-    async fn find_variable(&self, root: &str, variable: &str) -> Result<Value, String> {
+    async fn find_variable(&self, root: &str, variable: &str) -> ClientResult<Value> {
         let wanted = require_non_empty(variable, "variable")?;
         let by_uuid = wanted.starts_with('{');
         // A just-created variable can take a moment to show up in the listing.
@@ -1300,9 +1323,9 @@ impl BitbucketClient {
                 return Ok(found);
             }
         }
-        Err(format!(
+        Err(ClientError::upstream(format!(
             "no pipeline variable matching `{wanted}` in this scope"
-        ))
+        )))
     }
 
     async fn scan_variables(
@@ -1310,10 +1333,10 @@ impl BitbucketClient {
         root: &str,
         wanted: &str,
         by_uuid: bool,
-    ) -> Result<Option<Value>, String> {
+    ) -> ClientResult<Option<Value>> {
         let mut page = 1u32;
         loop {
-            let req = Self::paged(self.authed(self.http.get(root)), Some(100), Some(page));
+            let req = Self::paged(self.authed(self.http.get(root)), Some(100), Some(page))?;
             let value = self.send_json_request(req).await?;
             let values = value
                 .get("values")
@@ -1343,9 +1366,11 @@ impl BitbucketClient {
         key: Option<&str>,
         value: Option<&str>,
         secured: Option<bool>,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         if key.is_none() && value.is_none() && secured.is_none() {
-            return Err("at least one of key, value or secured must be provided".to_string());
+            return Err(ClientError::invalid(
+                "at least one of key, value or secured must be provided",
+            ));
         }
         let root = self
             .variables_root(workspace_override, repo_slug, environment)
@@ -1354,7 +1379,7 @@ impl BitbucketClient {
         let uuid = current
             .get("uuid")
             .and_then(Value::as_str)
-            .ok_or("current variable has no uuid")?
+            .ok_or(ClientError::upstream("current variable has no uuid"))?
             .to_string();
         let currently_secured = current
             .get("secured")
@@ -1380,10 +1405,9 @@ impl BitbucketClient {
                 body.insert("value".into(), json!(v));
             }
             None if currently_secured => {
-                return Err(
-                    "this variable is secured, so Bitbucket cannot return its value; pass `value` to update it"
-                        .to_string(),
-                );
+                return Err(ClientError::upstream(
+                    "this variable is secured, so Bitbucket cannot return its value; pass `value` to update it",
+                ));
             }
             None => {
                 body.insert(
@@ -1410,7 +1434,7 @@ impl BitbucketClient {
         repo_slug: &str,
         environment: Option<&str>,
         variable: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let root = self
             .variables_root(workspace_override, repo_slug, environment)
             .await?;
@@ -1418,7 +1442,7 @@ impl BitbucketClient {
         let uuid = current
             .get("uuid")
             .and_then(Value::as_str)
-            .ok_or("current variable has no uuid")?
+            .ok_or(ClientError::upstream("current variable has no uuid"))?
             .to_string();
         let req = self.authed(
             self.http
@@ -1433,55 +1457,59 @@ impl BitbucketClient {
         }))
     }
 
-    async fn send_json_request(&self, req: reqwest::RequestBuilder) -> Result<Value, String> {
+    async fn send_json_request(&self, req: reqwest::RequestBuilder) -> ClientResult<Value> {
         let response = req
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Bitbucket returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {msg}"
+            )));
         }
 
         if bytes.is_empty() {
             return Ok(json!({ "ok": true }));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Bitbucket: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Bitbucket: {e}")))
     }
 
     async fn send_json_request_allow_empty(
         &self,
         req: reqwest::RequestBuilder,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let response = req
             .send()
             .await
-            .map_err(|e| format!("Bitbucket request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Bitbucket request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Bitbucket response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Bitbucket response: {e}"))
+        })?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Bitbucket returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Bitbucket returned {status}: {msg}"
+            )));
         }
 
         if bytes.is_empty() {
             return Ok(json!({ "ok": true }));
         }
 
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid JSON from Bitbucket: {e}"))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| ClientError::upstream(format!("Invalid JSON from Bitbucket: {e}")))
     }
 }
 
@@ -1565,10 +1593,10 @@ fn summarize_variable(v: &Value) -> Value {
     })
 }
 
-fn require_non_empty(s: &str, name: &str) -> Result<String, String> {
+fn require_non_empty(s: &str, name: &str) -> ClientResult<String> {
     let t = s.trim();
     if t.is_empty() {
-        Err(format!("{name} must not be empty"))
+        Err(ClientError::invalid(format!("{name} must not be empty")))
     } else {
         Ok(t.to_string())
     }
@@ -1587,15 +1615,15 @@ fn encode_path_segment(s: &str) -> String {
 }
 
 /// Percent-encode a repository file path per segment, keeping the `/` separators.
-fn encode_file_path(path: &str) -> Result<String, String> {
+fn encode_file_path(path: &str) -> ClientResult<String> {
     let trimmed = path.trim().trim_matches('/');
     if trimmed.is_empty() {
-        return Err("path must not be empty".into());
+        return Err(ClientError::invalid("path must not be empty"));
     }
     let mut segments = Vec::new();
     for segment in trimmed.split('/') {
         if segment.is_empty() {
-            return Err("path must not contain empty segments".into());
+            return Err(ClientError::invalid("path must not contain empty segments"));
         }
         reject_dot_segment(segment, "path segment")?;
         segments.push(encode_path_segment(segment));
@@ -1604,16 +1632,16 @@ fn encode_file_path(path: &str) -> Result<String, String> {
 }
 
 /// Trim and percent-encode a commit, tag or branch for use as one path segment.
-fn commit_path_segment(commit: &str) -> Result<String, String> {
+fn commit_path_segment(commit: &str) -> ClientResult<String> {
     let commit = require_non_empty(commit, "commit")?;
     reject_dot_segment(&commit, "commit")?;
     Ok(encode_path_segment(&commit))
 }
 
 /// Rejects `.` and `..`, which URL parsing would resolve out of the endpoint path.
-fn reject_dot_segment(segment: &str, name: &str) -> Result<(), String> {
+fn reject_dot_segment(segment: &str, name: &str) -> ClientResult<()> {
     if segment == "." || segment == ".." {
-        Err(format!("{name} must not be . or .."))
+        Err(ClientError::invalid(format!("{name} must not be . or ..")))
     } else {
         Ok(())
     }
@@ -1730,11 +1758,11 @@ mod tests {
     fn encode_file_path_rejects_empty_segments() {
         assert_eq!(
             encode_file_path("a//b"),
-            Err("path must not contain empty segments".to_string())
+            Err(ClientError::invalid("path must not contain empty segments"))
         );
         assert_eq!(
             encode_file_path("  "),
-            Err("path must not be empty".to_string())
+            Err(ClientError::invalid("path must not be empty"))
         );
     }
 
@@ -1742,11 +1770,11 @@ mod tests {
     fn encode_file_path_rejects_dot_segments() {
         assert_eq!(
             encode_file_path("a/../b"),
-            Err("path segment must not be . or ..".to_string())
+            Err(ClientError::invalid("path segment must not be . or .."))
         );
         assert_eq!(
             encode_file_path("./a"),
-            Err("path segment must not be . or ..".to_string())
+            Err(ClientError::invalid("path segment must not be . or .."))
         );
     }
 
@@ -1769,7 +1797,7 @@ mod tests {
         let err = test_client()
             .get_file_request(None, "r", "..", "a.txt")
             .unwrap_err();
-        assert_eq!(err, "commit must not be . or ..");
+        assert_eq!(err, ClientError::invalid("commit must not be . or .."));
     }
 
     #[test]
@@ -1785,13 +1813,18 @@ mod tests {
             "https://api.bitbucket.org/2.0/repositories/ws/r/filehistory/dev/.gitignore?pagelen=2&page=E8Ux"
         );
         let plain = c
-            .file_history_request(None, "r", "dev", "a", Some(500), None)
+            .file_history_request(None, "r", "dev", "a", Some(100), None)
             .unwrap()
             .build()
             .unwrap();
         assert_eq!(
             plain.url().as_str(),
             "https://api.bitbucket.org/2.0/repositories/ws/r/filehistory/dev/a?pagelen=100"
+        );
+        assert_eq!(
+            c.file_history_request(None, "r", "dev", "a", Some(500), None)
+                .unwrap_err(),
+            ClientError::invalid("pagelen must be between 1 and 100, got 500")
         );
     }
 
@@ -2027,11 +2060,11 @@ mod tests {
         assert_eq!(require_non_empty("a b", "title"), Ok("a b".to_string()));
         assert_eq!(
             require_non_empty("", "repo_slug"),
-            Err("repo_slug must not be empty".to_string())
+            Err(ClientError::invalid("repo_slug must not be empty"))
         );
         assert_eq!(
             require_non_empty(" \t\n", "ref_name"),
-            Err("ref_name must not be empty".to_string())
+            Err(ClientError::invalid("ref_name must not be empty"))
         );
     }
 }

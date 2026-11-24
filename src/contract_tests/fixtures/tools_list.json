@@ -15,6 +15,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -335,6 +336,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -518,6 +520,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -600,6 +603,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -647,6 +651,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -725,6 +730,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -790,6 +796,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -875,6 +882,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -970,6 +978,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1066,6 +1075,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1113,6 +1123,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1160,6 +1171,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1217,6 +1229,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1261,6 +1274,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1408,6 +1422,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1564,6 +1579,7 @@
         },
         "pagelen": {
           "default": null,
+          "description": "Page size (1 to 100).",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -2013,7 +2029,7 @@
           "type": "string"
         },
         "ttl_seconds": {
-          "description": "Seconds the upload URL stays valid. Default 600, max 3600.",
+          "description": "Seconds the upload URL stays valid (1 to 3600, default 600).",
           "format": "uint64",
           "minimum": 0,
           "type": [

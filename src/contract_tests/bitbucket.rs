@@ -30,9 +30,15 @@ fn trail(mcp: &Mcp) -> Vec<String> {
         .collect()
 }
 
-/// Asserts a tool failed with the internal-error code and exactly `message`.
+/// Asserts a tool failed with the internal-error code (upstream failure) and exactly `message`.
 fn assert_tool_error(err: &Value, message: &str) {
     assert_eq!(err["code"], -32603, "unexpected error object: {err}");
+    assert_eq!(err["message"], message);
+}
+
+/// Asserts a tool rejected caller input with the invalid-params code and exactly `message`.
+fn assert_input_error(err: &Value, message: &str) {
+    assert_eq!(err["code"], -32602, "unexpected error object: {err}");
     assert_eq!(err["message"], message);
 }
 
@@ -510,17 +516,17 @@ async fn list_repositories_sends_paging_and_role_and_passes_json_through() {
 }
 
 #[tokio::test]
-async fn list_repositories_clamps_pagelen_and_blank_workspace_uses_header() {
+async fn list_repositories_pagelen_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     mcp.fake
         .on("GET", "/2.0/repositories/ws", 200, json!({"values": []}));
 
     mcp.call(
         "bitbucket_list_repositories",
-        json!({"workspace": "  ", "pagelen": 500, "role": "  "}),
+        json!({"workspace": "  ", "pagelen": 100, "role": "  "}),
     )
     .await;
-    mcp.call("bitbucket_list_repositories", json!({"pagelen": 0}))
+    mcp.call("bitbucket_list_repositories", json!({"pagelen": 1}))
         .await;
 
     let seen = mcp.fake.requests();
@@ -528,6 +534,18 @@ async fn list_repositories_clamps_pagelen_and_blank_workspace_uses_header() {
     assert_eq!(seen[0].path, "/2.0/repositories/ws");
     assert_eq!(seen[0].query_pairs(), pairs(&[("pagelen", "100")]));
     assert_eq!(seen[1].query_pairs(), pairs(&[("pagelen", "1")]));
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err("bitbucket_list_repositories", json!({"pagelen": bad}))
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("pagelen must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -578,7 +596,7 @@ async fn get_repository_blank_slug_is_rejected_before_any_request() {
     let err = mcp
         .call_err("bitbucket_get_repository", json!({"repo_slug": "  "}))
         .await;
-    assert_tool_error(&err, "repo_slug must not be empty");
+    assert_input_error(&err, "repo_slug must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -824,21 +842,21 @@ async fn create_pull_request_blank_required_fields_are_rejected() {
             json!({"repo_slug": "r", "title": "  ", "source_branch": "a", "destination_branch": "master"}),
         )
         .await;
-    assert_tool_error(&title, "title must not be empty");
+    assert_input_error(&title, "title must not be empty");
     let source = mcp
         .call_err(
             "bitbucket_create_pull_request",
             json!({"repo_slug": "r", "title": "T", "source_branch": "", "destination_branch": "master"}),
         )
         .await;
-    assert_tool_error(&source, "source_branch must not be empty");
+    assert_input_error(&source, "source_branch must not be empty");
     let dest = mcp
         .call_err(
             "bitbucket_create_pull_request",
             json!({"repo_slug": "r", "title": "T", "source_branch": "a", "destination_branch": " "}),
         )
         .await;
-    assert_tool_error(&dest, "destination_branch must not be empty");
+    assert_input_error(&dest, "destination_branch must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -1000,7 +1018,7 @@ async fn update_pull_request_needs_title_or_description_before_any_request() {
             json!({"repo_slug": "r", "pull_request_id": 7}),
         )
         .await;
-    assert_tool_error(
+    assert_input_error(
         &err,
         "at least one of title or description must be provided",
     );
@@ -1011,7 +1029,7 @@ async fn update_pull_request_needs_title_or_description_before_any_request() {
             json!({"repo_slug": "r", "pull_request_id": 7, "title": "  "}),
         )
         .await;
-    assert_tool_error(&blank, "title must not be empty");
+    assert_input_error(&blank, "title must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -1065,7 +1083,7 @@ async fn get_pull_request_diff_error_status_reports_code_and_body() {
 }
 
 #[tokio::test]
-async fn get_pull_request_diffstat_clamps_pagelen_and_sends_page() {
+async fn get_pull_request_diffstat_pagelen_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     let payload = json!({
         "size": 1,
@@ -1088,7 +1106,7 @@ async fn get_pull_request_diffstat_clamps_pagelen_and_sends_page() {
     let out = mcp
         .call(
             "bitbucket_get_pull_request_diffstat",
-            json!({"repo_slug": "r", "pull_request_id": 7, "pagelen": 1000, "page": 2}),
+            json!({"repo_slug": "r", "pull_request_id": 7, "pagelen": 100, "page": 2}),
         )
         .await;
     assert_eq!(out, payload);
@@ -1096,6 +1114,21 @@ async fn get_pull_request_diffstat_clamps_pagelen_and_sends_page() {
         mcp.fake.only_request().query_pairs(),
         pairs(&[("pagelen", "100"), ("page", "2")])
     );
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err(
+                "bitbucket_get_pull_request_diffstat",
+                json!({"repo_slug": "r", "pull_request_id": 7, "pagelen": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("pagelen must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -1254,7 +1287,7 @@ async fn create_pull_request_comment_blank_content_is_rejected() {
             json!({"repo_slug": "r", "pull_request_id": 7, "content": "   "}),
         )
         .await;
-    assert_tool_error(&err, "content must not be empty");
+    assert_input_error(&err, "content must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -1314,7 +1347,7 @@ async fn update_pull_request_comment_blank_content_is_rejected() {
             json!({"repo_slug": "r", "pull_request_id": 7, "comment_id": 55, "content": ""}),
         )
         .await;
-    assert_tool_error(&err, "content must not be empty");
+    assert_input_error(&err, "content must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -1454,42 +1487,42 @@ async fn get_file_rejects_dot_segments_and_blank_inputs_before_any_request() {
             json!({"repo_slug": "r", "commit": ".", "path": "a.txt"}),
         )
         .await;
-    assert_tool_error(&dot, "commit must not be . or ..");
+    assert_input_error(&dot, "commit must not be . or ..");
     let dotdot = mcp
         .call_err(
             "bitbucket_get_file",
             json!({"repo_slug": "r", "commit": "..", "path": "a.txt"}),
         )
         .await;
-    assert_tool_error(&dotdot, "commit must not be . or ..");
+    assert_input_error(&dotdot, "commit must not be . or ..");
     let blank_commit = mcp
         .call_err(
             "bitbucket_get_file",
             json!({"repo_slug": "r", "commit": "  ", "path": "a.txt"}),
         )
         .await;
-    assert_tool_error(&blank_commit, "commit must not be empty");
+    assert_input_error(&blank_commit, "commit must not be empty");
     let dot_path = mcp
         .call_err(
             "bitbucket_get_file",
             json!({"repo_slug": "r", "commit": "main", "path": "a/../b"}),
         )
         .await;
-    assert_tool_error(&dot_path, "path segment must not be . or ..");
+    assert_input_error(&dot_path, "path segment must not be . or ..");
     let blank_path = mcp
         .call_err(
             "bitbucket_get_file",
             json!({"repo_slug": "r", "commit": "main", "path": "  "}),
         )
         .await;
-    assert_tool_error(&blank_path, "path must not be empty");
+    assert_input_error(&blank_path, "path must not be empty");
     let empty_segment = mcp
         .call_err(
             "bitbucket_get_file",
             json!({"repo_slug": "r", "commit": "main", "path": "a//b"}),
         )
         .await;
-    assert_tool_error(&empty_segment, "path must not contain empty segments");
+    assert_input_error(&empty_segment, "path must not contain empty segments");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -1515,7 +1548,7 @@ async fn get_file_returns_1000x_content_unchanged() {
 }
 
 #[tokio::test]
-async fn file_history_clamps_pagelen_and_passes_numeric_cursor() {
+async fn file_history_pagelen_bounds_pass_and_out_of_range_is_rejected() {
     let mcp = Mcp::start().await;
     let payload = json!({"values": [{"commit": {"hash": "abc123"}}], "next": "x"});
     mcp.fake.on(
@@ -1528,7 +1561,7 @@ async fn file_history_clamps_pagelen_and_passes_numeric_cursor() {
     let out = mcp
         .call(
             "bitbucket_file_history",
-            json!({"repo_slug": "r", "commit": "dev", "path": ".gitignore", "pagelen": 500, "page": 2}),
+            json!({"repo_slug": "r", "commit": "dev", "path": ".gitignore", "pagelen": 100, "page": 2}),
         )
         .await;
     assert_eq!(out, payload);
@@ -1536,6 +1569,21 @@ async fn file_history_clamps_pagelen_and_passes_numeric_cursor() {
         mcp.fake.only_request().query_pairs(),
         pairs(&[("pagelen", "100"), ("page", "2")])
     );
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err(
+                "bitbucket_file_history",
+                json!({"repo_slug": "r", "commit": "dev", "path": ".gitignore", "pagelen": bad, "page": 2}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("pagelen must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -1591,7 +1639,7 @@ async fn get_commit_passes_json_through_and_rejects_dot() {
             json!({"repo_slug": "r", "commit": ".."}),
         )
         .await;
-    assert_tool_error(&err, "commit must not be . or ..");
+    assert_input_error(&err, "commit must not be . or ..");
     assert_eq!(
         trail(&mcp),
         vec!["GET /2.0/repositories/ws/r/commit/abc123"]
@@ -2098,7 +2146,7 @@ async fn get_pipeline_blank_is_rejected_before_any_request() {
             json!({"repo_slug": "r", "pipeline": "  "}),
         )
         .await;
-    assert_tool_error(&err, "pipeline must not be empty");
+    assert_input_error(&err, "pipeline must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -2286,14 +2334,14 @@ async fn get_pipeline_step_log_404_and_blank_inputs() {
             json!({"repo_slug": "r", "pipeline": "142", "step_uuid": "  "}),
         )
         .await;
-    assert_tool_error(&blank_step, "step_uuid must not be empty");
+    assert_input_error(&blank_step, "step_uuid must not be empty");
     let blank_pipeline = mcp
         .call_err(
             "bitbucket_get_pipeline_step_log",
             json!({"repo_slug": "r", "pipeline": " ", "step_uuid": "{step-1}"}),
         )
         .await;
-    assert_tool_error(&blank_pipeline, "pipeline must not be empty");
+    assert_input_error(&blank_pipeline, "pipeline must not be empty");
     assert_eq!(mcp.fake.requests().len(), 1);
 }
 
@@ -2400,14 +2448,14 @@ async fn trigger_pipeline_invalid_ref_type_and_blank_ref_are_rejected() {
             json!({"repo_slug": "r", "ref_name": "master", "ref_type": "commit"}),
         )
         .await;
-    assert_tool_error(&bad_type, "ref_type must be `branch` or `tag`");
+    assert_input_error(&bad_type, "ref_type must be `branch` or `tag`");
     let blank_ref = mcp
         .call_err(
             "bitbucket_trigger_pipeline",
             json!({"repo_slug": "r", "ref_name": "  "}),
         )
         .await;
-    assert_tool_error(&blank_ref, "ref_name must not be empty");
+    assert_input_error(&blank_ref, "ref_name must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -2455,7 +2503,7 @@ async fn stop_pipeline_json_200_is_passed_through_and_blank_is_rejected() {
             json!({"repo_slug": "r", "pipeline": ""}),
         )
         .await;
-    assert_tool_error(&err, "pipeline must not be empty");
+    assert_input_error(&err, "pipeline must not be empty");
     assert_eq!(mcp.fake.requests().len(), 1);
 }
 
@@ -2494,7 +2542,7 @@ async fn list_deployments_summarises_build_numbers_and_sends_query() {
 }
 
 #[tokio::test]
-async fn list_deployments_blank_sort_uses_default_and_clamps_pagelen() {
+async fn list_deployments_blank_sort_uses_default_and_rejects_bad_pagelen() {
     let mcp = Mcp::start().await;
     mcp.fake.on(
         "GET",
@@ -2505,7 +2553,7 @@ async fn list_deployments_blank_sort_uses_default_and_clamps_pagelen() {
 
     mcp.call(
         "bitbucket_list_deployments",
-        json!({"repo_slug": "r", "sort": "  ", "pagelen": 1000}),
+        json!({"repo_slug": "r", "sort": "  ", "pagelen": 100}),
     )
     .await;
     mcp.call(
@@ -2523,6 +2571,21 @@ async fn list_deployments_blank_sort_uses_default_and_clamps_pagelen() {
         seen[1].query_pairs(),
         pairs(&[("sort", "state.started_on")])
     );
+
+    for bad in [0, 101] {
+        let err = mcp
+            .call_err(
+                "bitbucket_list_deployments",
+                json!({"repo_slug": "r", "pagelen": bad}),
+            )
+            .await;
+        assert_eq!(err["code"], -32602);
+        assert_eq!(
+            err["message"],
+            format!("pagelen must be between 1 and 100, got {bad}")
+        );
+    }
+    assert_eq!(mcp.fake.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -2872,7 +2935,7 @@ async fn create_pipeline_variable_blank_key_is_rejected_before_environment_looku
             json!({"repo_slug": "r", "environment": "Production", "key": "  ", "value": "x"}),
         )
         .await;
-    assert_tool_error(&err, "key must not be empty");
+    assert_input_error(&err, "key must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -3054,7 +3117,7 @@ async fn update_pipeline_variable_needs_a_field_and_a_name_before_any_request() 
             json!({"repo_slug": "r", "variable": "LOG"}),
         )
         .await;
-    assert_tool_error(
+    assert_input_error(
         &nothing,
         "at least one of key, value or secured must be provided",
     );
@@ -3065,7 +3128,7 @@ async fn update_pipeline_variable_needs_a_field_and_a_name_before_any_request() 
             json!({"repo_slug": "r", "variable": "  ", "value": "x"}),
         )
         .await;
-    assert_tool_error(&blank, "variable must not be empty");
+    assert_input_error(&blank, "variable must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 
@@ -3208,7 +3271,7 @@ async fn delete_pipeline_variable_blank_name_is_rejected_before_any_request() {
             json!({"repo_slug": "r", "variable": ""}),
         )
         .await;
-    assert_tool_error(&err, "variable must not be empty");
+    assert_input_error(&err, "variable must not be empty");
     assert!(mcp.fake.requests().is_empty());
 }
 

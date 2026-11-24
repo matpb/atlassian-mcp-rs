@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::credentials::AtlassianCredentials;
+use crate::error::{ClientError, ClientResult, check_range};
 
 /// Max characters of `body.storage.value` returned to the model (UTF-8 scalar values, not bytes).
 const MAX_CONFLUENCE_BODY_CHARS: usize = 120_000;
@@ -24,12 +25,13 @@ impl ConfluenceClient {
         }
     }
 
-    pub async fn search_cql(&self, cql: &str, limit: u32) -> Result<Value, String> {
+    pub async fn search_cql(&self, cql: &str, limit: u32) -> ClientResult<Value> {
         let cql = cql.trim();
         if cql.is_empty() {
-            return Err("cql must not be empty".into());
+            return Err(ClientError::invalid("cql must not be empty"));
         }
-        let lim = limit.clamp(1, 100);
+        check_range("limit", u64::from(limit), 1, 100)?;
+        let lim = limit;
         let url = format!("{}/search", self.wiki_api_root);
         let response = self
             .http
@@ -39,17 +41,18 @@ impl ConfluenceClient {
             .query(&[("cql", cql), ("limit", &lim.to_string())])
             .send()
             .await
-            .map_err(|e| format!("Confluence request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Confluence request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Confluence response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Confluence response: {e}"))
+        })?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Confluence returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Confluence returned {status}: {msg}"
+            )));
         }
 
         let raw = parse_body(&bytes)?;
@@ -68,10 +71,10 @@ impl ConfluenceClient {
         }))
     }
 
-    pub async fn get_page(&self, page_id: &str) -> Result<Value, String> {
+    pub async fn get_page(&self, page_id: &str) -> ClientResult<Value> {
         let id = page_id.trim();
         if id.is_empty() {
-            return Err("page_id must not be empty".into());
+            return Err(ClientError::invalid("page_id must not be empty"));
         }
         let enc = encode_path_segment(id);
         let url = format!(
@@ -85,7 +88,7 @@ impl ConfluenceClient {
 
     /// Resolve a space key (e.g. "DOCS") to its numeric v2 space ID.
     /// If the input is already numeric, returns it as-is.
-    async fn resolve_space_id(&self, space_id_or_key: &str) -> Result<String, String> {
+    async fn resolve_space_id(&self, space_id_or_key: &str) -> ClientResult<String> {
         // If it's already numeric, return as-is
         if space_id_or_key.chars().all(|c| c.is_ascii_digit()) {
             return Ok(space_id_or_key.to_string());
@@ -100,14 +103,16 @@ impl ConfluenceClient {
         let results = raw
             .get("results")
             .and_then(|r| r.as_array())
-            .ok_or_else(|| format!("No spaces found for key \"{space_id_or_key}\""))?;
-        let space = results
-            .first()
-            .ok_or_else(|| format!("Space \"{space_id_or_key}\" not found"))?;
+            .ok_or_else(|| {
+                ClientError::upstream(format!("No spaces found for key \"{space_id_or_key}\""))
+            })?;
+        let space = results.first().ok_or_else(|| {
+            ClientError::upstream(format!("Space \"{space_id_or_key}\" not found"))
+        })?;
         let id = space
             .get("id")
             .and_then(|i| i.as_str())
-            .ok_or_else(|| "Space response missing id field".to_string())?;
+            .ok_or_else(|| ClientError::upstream("Space response missing id field"))?;
         Ok(id.to_string())
     }
 
@@ -119,24 +124,24 @@ impl ConfluenceClient {
         body_format: &str,
         parent_id: Option<&str>,
         status: &str,
-    ) -> Result<Value, String> {
+    ) -> ClientResult<Value> {
         let space_id = space_id.trim();
         if space_id.is_empty() {
-            return Err("space_id must not be empty".into());
+            return Err(ClientError::invalid("space_id must not be empty"));
         }
-        let space_id = self.resolve_space_id(space_id).await?;
         let title = title.trim();
         if title.is_empty() {
-            return Err("title must not be empty".into());
+            return Err(ClientError::invalid("title must not be empty"));
         }
         let representation = match body_format {
             "storage" | "wiki" => body_format,
             other => {
-                return Err(format!(
+                return Err(ClientError::invalid(format!(
                     "body_format must be \"storage\" or \"wiki\", got \"{other}\""
-                ));
+                )));
             }
         };
+        let space_id = self.resolve_space_id(space_id).await?;
 
         let url = format!("{}/api/v2/pages", self.wiki_base_url());
 
@@ -168,17 +173,18 @@ impl ConfluenceClient {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| format!("Confluence request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Confluence request failed: {e}")))?;
 
         let status_code = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Confluence response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Confluence response: {e}"))
+        })?;
 
         if !status_code.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Confluence returned {status_code}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Confluence returned {status_code}: {msg}"
+            )));
         }
 
         let raw = parse_body(&bytes)?;
@@ -202,7 +208,7 @@ impl ConfluenceClient {
             .unwrap_or(&self.wiki_api_root)
     }
 
-    async fn get_json(&self, url: &str) -> Result<Value, String> {
+    async fn get_json(&self, url: &str) -> ClientResult<Value> {
         let response = self
             .http
             .get(url)
@@ -210,17 +216,18 @@ impl ConfluenceClient {
             .header("Accept", "application/json")
             .send()
             .await
-            .map_err(|e| format!("Confluence request failed: {e}"))?;
+            .map_err(|e| ClientError::upstream(format!("Confluence request failed: {e}")))?;
 
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Confluence response: {e}"))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Confluence response: {e}"))
+        })?;
 
         if !status.is_success() {
             let msg = String::from_utf8_lossy(&bytes).to_string();
-            return Err(format!("Confluence returned {status}: {msg}"));
+            return Err(ClientError::upstream(format!(
+                "Confluence returned {status}: {msg}"
+            )));
         }
 
         parse_body(&bytes)
@@ -228,11 +235,11 @@ impl ConfluenceClient {
 }
 
 /// Parses a 2xx body; a blank body (no content) becomes `{"ok": true}`, as in Jira and Bitbucket.
-fn parse_body(bytes: &[u8]) -> Result<Value, String> {
+fn parse_body(bytes: &[u8]) -> ClientResult<Value> {
     if bytes.trim_ascii().is_empty() {
         return Ok(json!({ "ok": true }));
     }
-    serde_json::from_slice(bytes).map_err(|e| format!("Invalid JSON: {e}"))
+    serde_json::from_slice(bytes).map_err(|e| ClientError::upstream(format!("Invalid JSON: {e}")))
 }
 
 /// An id as text: a JSON string, or a JSON number written out in full.
