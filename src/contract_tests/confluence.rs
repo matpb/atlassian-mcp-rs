@@ -551,3 +551,291 @@ async fn confluence_create_page_validates_before_space_lookup() {
     }
     assert!(mcp.fake.requests().is_empty());
 }
+
+fn update_current_page(version: u64, body: &str) -> Value {
+    json!({
+        "id": "123",
+        "type": "page",
+        "title": "Deploy runbook",
+        "space": {"key": "DOCS", "name": "Docs"},
+        "version": {"number": version, "message": ""},
+        "body": {"storage": {"representation": "storage", "value": body}},
+        "_links": {"webui": "/spaces/DOCS/pages/123/Deploy+runbook"}
+    })
+}
+
+fn update_put_reply(version: u64, message: Value) -> Value {
+    json!({
+        "id": "123",
+        "title": "Deploy runbook",
+        "version": {"number": version, "message": message},
+        "_links": {"webui": "/spaces/DOCS/pages/123/Deploy+runbook"}
+    })
+}
+
+#[tokio::test]
+async fn confluence_update_page_applies_edits_and_puts_next_version() {
+    let mcp = Mcp::start().await;
+    mcp.fake.on(
+        "GET",
+        PAGE_PATH,
+        200,
+        update_current_page(20, "<p>a</p><p>b</p>"),
+    );
+    mcp.fake
+        .on("PUT", PAGE_PATH, 200, update_put_reply(21, json!("m")));
+
+    let out = mcp
+        .call(
+            "confluence_update_page",
+            json!({
+                "page_id": "123",
+                "version": 20,
+                "edits": [{"find": "<p>b</p>", "replace": "<p>c</p>"}],
+                "version_message": "m"
+            }),
+        )
+        .await;
+    assert_eq!(
+        out,
+        json!({
+            "id": "123",
+            "title": "Deploy runbook",
+            "version": {"number": 21, "message": "m"},
+            "body_chars": 16,
+            "webui": "/spaces/DOCS/pages/123/Deploy+runbook"
+        })
+    );
+
+    let requests = mcp.fake.requests();
+    let seen: Vec<(String, String)> = requests
+        .iter()
+        .map(|r| (r.method.clone(), r.path.clone()))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("GET".to_string(), PAGE_PATH.to_string()),
+            ("PUT".to_string(), PAGE_PATH.to_string()),
+        ]
+    );
+    assert_eq!(
+        requests[0].query_pairs(),
+        vec![(
+            "expand".to_string(),
+            "body.storage,version,space".to_string()
+        )]
+    );
+    assert_eq!(
+        requests[1].json(),
+        json!({
+            "id": "123",
+            "type": "page",
+            "title": "Deploy runbook",
+            "space": {"key": "DOCS"},
+            "version": {"number": 21, "message": "m"},
+            "body": {"storage": {"value": "<p>a</p><p>c</p>", "representation": "storage"}}
+        })
+    );
+}
+
+#[tokio::test]
+async fn confluence_update_page_refuses_stale_version() {
+    let mcp = Mcp::start().await;
+    mcp.fake
+        .on("GET", PAGE_PATH, 200, update_current_page(21, "<p>a</p>"));
+
+    let err = mcp
+        .call_err(
+            "confluence_update_page",
+            json!({
+                "page_id": "123",
+                "version": 20,
+                "edits": [{"find": "<p>a</p>", "replace": "<p>b</p>"}]
+            }),
+        )
+        .await;
+    assert_eq!(err["code"], -32602);
+    assert_eq!(
+        err["message"],
+        "page 123 is at version 21, not 20: re-read it with confluence_get_page and retry"
+    );
+    assert_eq!(mcp.fake.only_request().method, "GET");
+}
+
+#[tokio::test]
+async fn confluence_update_page_refuses_ambiguous_edit() {
+    let mcp = Mcp::start().await;
+    mcp.fake.on(
+        "GET",
+        PAGE_PATH,
+        200,
+        update_current_page(20, "<p>x</p><p>x</p>"),
+    );
+
+    let err = mcp
+        .call_err(
+            "confluence_update_page",
+            json!({
+                "page_id": "123",
+                "version": 20,
+                "edits": [{"find": "<p>x</p>", "replace": "<p>y</p>"}]
+            }),
+        )
+        .await;
+    assert_eq!(err["code"], -32602);
+    assert_eq!(
+        err["message"],
+        "edit 1: find occurs 2 times, it must occur exactly once"
+    );
+    assert_eq!(mcp.fake.only_request().method, "GET");
+}
+
+#[tokio::test]
+async fn confluence_update_page_full_body_wiki() {
+    let mcp = Mcp::start().await;
+    mcp.fake
+        .on("GET", PAGE_PATH, 200, update_current_page(20, "<p>old</p>"));
+    mcp.fake
+        .on("PUT", PAGE_PATH, 200, update_put_reply(21, Value::Null));
+
+    let out = mcp
+        .call(
+            "confluence_update_page",
+            json!({
+                "page_id": "123",
+                "version": 20,
+                "body": "h1. New",
+                "body_format": "wiki"
+            }),
+        )
+        .await;
+    assert_eq!(out["body_chars"], 7);
+    assert_eq!(out["version"], json!({"number": 21, "message": null}));
+
+    let requests = mcp.fake.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].method, "PUT");
+    assert_eq!(
+        requests[1].json(),
+        json!({
+            "id": "123",
+            "type": "page",
+            "title": "Deploy runbook",
+            "space": {"key": "DOCS"},
+            "version": {"number": 21},
+            "body": {"storage": {"value": "h1. New", "representation": "wiki"}}
+        })
+    );
+}
+
+#[tokio::test]
+async fn confluence_update_page_title_only_keeps_body() {
+    let mcp = Mcp::start().await;
+    mcp.fake.on(
+        "GET",
+        PAGE_PATH,
+        200,
+        update_current_page(20, "<p>keep</p>"),
+    );
+    mcp.fake
+        .on("PUT", PAGE_PATH, 200, update_put_reply(21, Value::Null));
+
+    let out = mcp
+        .call(
+            "confluence_update_page",
+            json!({"page_id": "123", "version": 20, "title": "  Renamed  "}),
+        )
+        .await;
+    assert_eq!(out["title"], "Deploy runbook");
+    assert_eq!(out["body_chars"], 11);
+
+    let req = mcp.fake.requests().remove(1);
+    assert_eq!(req.method, "PUT");
+    assert_eq!(
+        req.json(),
+        json!({
+            "id": "123",
+            "type": "page",
+            "title": "Renamed",
+            "space": {"key": "DOCS"},
+            "version": {"number": 21},
+            "body": {"storage": {"value": "<p>keep</p>", "representation": "storage"}}
+        })
+    );
+}
+
+#[tokio::test]
+async fn confluence_update_page_validation_errors_send_nothing() {
+    let mcp = Mcp::start().await;
+    let cases = [
+        (
+            json!({"page_id": "123", "version": 20, "edits": [{"find": "a", "replace": "b"}], "body": "x"}),
+            "give either edits or body, not both",
+        ),
+        (
+            json!({"page_id": "123", "version": 0, "title": "T"}),
+            "version must be at least 1",
+        ),
+        (
+            json!({"page_id": "  ", "version": 20, "title": "T"}),
+            "page_id must not be empty",
+        ),
+        (
+            json!({"page_id": "123", "version": 20}),
+            "nothing to update: give edits, body or title",
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "body": "x", "body_format": "markdown"}),
+            r#"body_format must be "storage" or "wiki", got "markdown""#,
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "edits": [{"find": "a", "replace": "b"}], "body_format": "wiki"}),
+            r#"edits apply to the storage body; body_format must be "storage""#,
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "edits": []}),
+            "edits must not be empty",
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "edits": [{"find": "a", "replace": "b"}, {"find": "", "replace": "c"}]}),
+            "edit 2: find must not be empty",
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "title": "   "}),
+            "title must not be empty",
+        ),
+        (
+            json!({"page_id": "123", "version": 20, "body": " \n"}),
+            "body must not be empty: an empty body would blank the page",
+        ),
+    ];
+    for (args, message) in cases {
+        let err = mcp.call_err("confluence_update_page", args.clone()).await;
+        assert_eq!(err["code"], -32602, "args: {args}");
+        assert_eq!(err["message"], message, "args: {args}");
+    }
+    assert!(mcp.fake.requests().is_empty());
+}
+
+#[tokio::test]
+async fn confluence_update_page_put_failure_is_upstream_error() {
+    let mcp = Mcp::start().await;
+    mcp.fake
+        .on("GET", PAGE_PATH, 200, update_current_page(20, "<p>a</p>"));
+    mcp.fake
+        .on_raw("PUT", PAGE_PATH, 409, "{\"message\":\"Version conflict\"}");
+
+    let err = mcp
+        .call_err(
+            "confluence_update_page",
+            json!({"page_id": "123", "version": 20, "body": "<p>b</p>"}),
+        )
+        .await;
+    assert_eq!(err["code"], -32603);
+    assert_eq!(
+        err["message"],
+        "Confluence returned 409 Conflict: {\"message\":\"Version conflict\"}"
+    );
+    assert_eq!(mcp.fake.requests().len(), 2);
+}

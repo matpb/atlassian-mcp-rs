@@ -200,6 +200,155 @@ impl ConfluenceClient {
         }))
     }
 
+    /// Update a page (`PUT /content/{id}`), refused unless `version` is the page's current version.
+    /// `edits` apply to the current storage body; `body` replaces it; neither keeps it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_page(
+        &self,
+        page_id: &str,
+        version: u64,
+        edits: Option<&[(String, String)]>,
+        body: Option<&str>,
+        body_format: &str,
+        title: Option<&str>,
+        version_message: Option<&str>,
+    ) -> ClientResult<Value> {
+        let id = page_id.trim();
+        if id.is_empty() {
+            return Err(ClientError::invalid("page_id must not be empty"));
+        }
+        if version == 0 {
+            return Err(ClientError::invalid("version must be at least 1"));
+        }
+        if edits.is_some() && body.is_some() {
+            return Err(ClientError::invalid("give either edits or body, not both"));
+        }
+        if body.is_some_and(|b| b.trim().is_empty()) {
+            return Err(ClientError::invalid(
+                "body must not be empty: an empty body would blank the page",
+            ));
+        }
+        let representation = match body_format {
+            "storage" | "wiki" => body_format,
+            other => {
+                return Err(ClientError::invalid(format!(
+                    "body_format must be \"storage\" or \"wiki\", got \"{other}\""
+                )));
+            }
+        };
+        if edits.is_some() && representation == "wiki" {
+            return Err(ClientError::invalid(
+                r#"edits apply to the storage body; body_format must be "storage""#,
+            ));
+        }
+        if let Some(edits) = edits {
+            if edits.is_empty() {
+                return Err(ClientError::invalid("edits must not be empty"));
+            }
+            if let Some(n) = edits.iter().position(|(find, _)| find.is_empty()) {
+                return Err(ClientError::invalid(format!(
+                    "edit {}: find must not be empty",
+                    n + 1
+                )));
+            }
+        }
+        if edits.is_none() && body.is_none() && title.is_none() {
+            return Err(ClientError::invalid(
+                "nothing to update: give edits, body or title",
+            ));
+        }
+        let title = title.map(str::trim);
+        if title.is_some_and(str::is_empty) {
+            return Err(ClientError::invalid("title must not be empty"));
+        }
+
+        let content_url = format!("{}/content/{}", self.wiki_api_root, encode_path_segment(id));
+        let raw: Value = self
+            .get_json(&format!("{content_url}?expand=body.storage,version,space"))
+            .await?;
+
+        let current = raw
+            .pointer("/version/number")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| ClientError::upstream("Confluence response missing version.number"))?;
+        if current != version {
+            return Err(ClientError::invalid(format!(
+                "page {id} is at version {current}, not {version}: re-read it with confluence_get_page and retry"
+            )));
+        }
+        let next_version = version.checked_add(1).ok_or_else(|| {
+            ClientError::invalid(format!("version {version} cannot be incremented"))
+        })?;
+
+        let (new_body, representation) = if let Some(body) = body {
+            (body.to_string(), representation)
+        } else if let Some(edits) = edits {
+            (apply_edits(storage_value(&raw)?, edits)?, "storage")
+        } else {
+            (storage_value(&raw)?.to_string(), "storage")
+        };
+        let new_title = match title {
+            Some(t) => t.to_string(),
+            None => raw
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ClientError::upstream("Confluence response missing title"))?
+                .to_string(),
+        };
+        let page_type = raw.get("type").and_then(Value::as_str).unwrap_or("page");
+
+        let mut payload = json!({
+            "id": id,
+            "type": page_type,
+            "title": new_title,
+            "version": {"number": next_version},
+            "body": {"storage": {"value": new_body, "representation": representation}},
+        });
+        if let Some(key) = raw.pointer("/space/key").and_then(Value::as_str) {
+            payload["space"] = json!({"key": key});
+        }
+        if let Some(message) = version_message {
+            payload["version"]["message"] = json!(message);
+        }
+
+        let response = self
+            .http
+            .put(&content_url)
+            .basic_auth(&self.email, Some(&self.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ClientError::upstream(format!("Confluence request failed: {e}")))?;
+
+        let status_code = response.status();
+        let bytes = response.bytes().await.map_err(|e| {
+            ClientError::upstream(format!("Failed to read Confluence response: {e}"))
+        })?;
+
+        if !status_code.is_success() {
+            let msg = String::from_utf8_lossy(&bytes).to_string();
+            return Err(ClientError::upstream(format!(
+                "Confluence returned {status_code}: {msg}"
+            )));
+        }
+
+        let raw = parse_body(&bytes)?;
+        let webui = raw.pointer("/_links/webui").and_then(|w| w.as_str());
+
+        Ok(json!({
+            "id": raw.get("id"),
+            "title": raw.get("title"),
+            "version": {
+                "number": raw.pointer("/version/number"),
+                "message": raw.pointer("/version/message"),
+            },
+            "body_chars": new_body.chars().count(),
+            "webui": webui,
+        }))
+    }
+
     /// Return the wiki base URL (without /rest/api or /api/v2 suffix).
     fn wiki_base_url(&self) -> &str {
         // wiki_api_root ends with `/wiki/rest/api`; strip `/rest/api` to get the wiki root
@@ -372,6 +521,50 @@ fn truncate_chars(s: &str, max: usize) -> (String, usize, bool) {
     let head: String = s.chars().take(max).collect();
     let note = format!("\n\n[… truncated for MCP: included {max} of {total} characters]");
     (head + &note, total, true)
+}
+
+/// The current storage body of a fetched page; missing means the update must not run.
+fn storage_value(raw: &Value) -> ClientResult<&str> {
+    raw.pointer("/body/storage/value")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ClientError::upstream("Confluence response missing body.storage.value"))
+}
+
+/// Applies `(find, replace)` pairs in order. Each `find` must occur exactly once in the text at its turn.
+fn apply_edits(body: &str, edits: &[(String, String)]) -> ClientResult<String> {
+    let mut text = body.to_string();
+    for (n, (find, replace)) in edits.iter().enumerate() {
+        let positions = occurrences(&text, find);
+        let [at] = positions.as_slice() else {
+            return Err(ClientError::invalid(format!(
+                "edit {}: find occurs {} times, it must occur exactly once",
+                n + 1,
+                positions.len()
+            )));
+        };
+        let at = *at;
+        let mut next = String::with_capacity(text.len() + replace.len());
+        next.push_str(&text[..at]);
+        next.push_str(replace);
+        next.push_str(&text[at + find.len()..]);
+        text = next;
+    }
+    Ok(text)
+}
+
+/// Byte offsets of every occurrence of `find`, overlapping ones included; empty for an empty `find`.
+fn occurrences(text: &str, find: &str) -> Vec<usize> {
+    if find.is_empty() {
+        return Vec::new();
+    }
+    let step = find.chars().next().map_or(1, char::len_utf8);
+    let mut found = Vec::new();
+    let mut start = 0;
+    while let Some(rel) = text[start..].find(find) {
+        found.push(start + rel);
+        start += rel + step;
+    }
+    found
 }
 
 fn encode_path_segment(key: &str) -> String {
@@ -554,5 +747,85 @@ mod tests {
         );
         assert_eq!(total, 3);
         assert!(truncated);
+    }
+
+    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(f, r)| (f.to_string(), r.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn apply_edits_runs_in_order_so_later_edits_see_earlier_output() {
+        let edits = pairs(&[("<p>a</p>", "<p>b</p>"), ("<p>b</p>", "<p>c</p>")]);
+        assert_eq!(apply_edits("<p>a</p>", &edits), Ok("<p>c</p>".to_string()));
+    }
+
+    #[test]
+    fn apply_edits_with_no_edits_returns_body_unchanged() {
+        assert_eq!(apply_edits("abc", &[]), Ok("abc".to_string()));
+    }
+
+    #[test]
+    fn apply_edits_zero_matches_names_the_edit_and_count() {
+        let edits = pairs(&[("a", "b"), ("x", "y")]);
+        assert_eq!(
+            apply_edits("abc", &edits),
+            Err(ClientError::invalid(
+                "edit 2: find occurs 0 times, it must occur exactly once"
+            ))
+        );
+    }
+
+    #[test]
+    fn apply_edits_two_matches_is_refused() {
+        assert_eq!(
+            apply_edits("x x", &pairs(&[("x", "y")])),
+            Err(ClientError::invalid(
+                "edit 1: find occurs 2 times, it must occur exactly once"
+            ))
+        );
+    }
+
+    #[test]
+    fn apply_edits_counts_overlapping_matches() {
+        assert_eq!(
+            apply_edits("aaa", &pairs(&[("aa", "b")])),
+            Err(ClientError::invalid(
+                "edit 1: find occurs 2 times, it must occur exactly once"
+            ))
+        );
+    }
+
+    #[test]
+    fn apply_edits_replacement_is_literal() {
+        assert_eq!(
+            apply_edits("a b", &pairs(&[("a", "$1 \\ $0")])),
+            Ok("$1 \\ $0 b".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_edits_handles_multibyte_text() {
+        assert_eq!(
+            apply_edits("héllo wörld", &pairs(&[("wö", "Wö")])),
+            Ok("héllo Wörld".to_string())
+        );
+        assert_eq!(
+            apply_edits("ééé", &pairs(&[("éé", "x")])),
+            Err(ClientError::invalid(
+                "edit 1: find occurs 2 times, it must occur exactly once"
+            ))
+        );
+    }
+
+    #[test]
+    fn apply_edits_empty_find_matches_nothing() {
+        assert_eq!(
+            apply_edits("abc", &pairs(&[("", "x")])),
+            Err(ClientError::invalid(
+                "edit 1: find occurs 0 times, it must occur exactly once"
+            ))
+        );
     }
 }

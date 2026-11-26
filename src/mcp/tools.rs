@@ -327,6 +327,37 @@ struct ConfluenceCreatePageParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct ConfluenceUpdatePageParams {
+    /// Confluence content ID (numeric string)
+    page_id: String,
+    /// The page's current version number, as returned by confluence_get_page
+    version: u64,
+    /// Exact find/replace pairs applied in order to the current storage body
+    #[serde(default)]
+    edits: Option<Vec<ConfluenceEdit>>,
+    /// Complete new body; cannot be combined with edits
+    #[serde(default)]
+    body: Option<String>,
+    /// "storage" (default) or "wiki"; applies to body only
+    #[serde(default = "default_body_format")]
+    body_format: String,
+    /// New title; omitted keeps the current title
+    #[serde(default)]
+    title: Option<String>,
+    /// Note shown in the page history
+    #[serde(default)]
+    version_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ConfluenceEdit {
+    /// Exact text to find; must occur exactly once in the body at the time it is applied
+    find: String,
+    /// Replacement text
+    replace: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct BbListReposParams {
     /// When set, use this workspace instead of `X-Bitbucket-Workspace`
     #[serde(default)]
@@ -1393,6 +1424,37 @@ impl AtlassianMcp {
                 &p.body_format,
                 p.parent_id.as_deref(),
                 &p.status,
+            )
+            .await
+            .map_err(ErrorData::from)?;
+
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        name = "confluence_update_page",
+        description = "Update an existing Confluence page (storage format). Pass `version`, the version number you read with confluence_get_page: the update is refused if the page has changed since, so re-read it and retry. Change the body in one of two ways: `edits`, a list of {find, replace} pairs applied in order to the current storage body, where each `find` must appear exactly once (copy it verbatim from confluence_get_page, including tags and attributes); or `body`, the complete new body. Give one of the two, or neither to change only the title. Optional `title` renames the page; optional `version_message` is the history note. Returns id, title, the new version number and message, the body length, and the webui link. Requires X-Atlassian-Site-Url, X-Atlassian-Email and X-Atlassian-Api-Token."
+    )]
+    async fn confluence_update_page(
+        &self,
+        Extension(parts): Extension<Parts>,
+        Parameters(p): Parameters<ConfluenceUpdatePageParams>,
+    ) -> Result<String, ErrorData> {
+        let creds = Self::resolve(&parts)?;
+        let cf = ConfluenceClient::new(self.http.clone(), &creds);
+        let edits: Option<Vec<(String, String)>> = p
+            .edits
+            .map(|edits| edits.into_iter().map(|e| (e.find, e.replace)).collect());
+        let value = cf
+            .update_page(
+                &p.page_id,
+                p.version,
+                edits.as_deref(),
+                p.body.as_deref(),
+                &p.body_format,
+                p.title.as_deref(),
+                p.version_message.as_deref(),
             )
             .await
             .map_err(ErrorData::from)?;

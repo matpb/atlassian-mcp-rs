@@ -1842,6 +1842,88 @@
     "name": "confluence_search"
   },
   {
+    "description": "Update an existing Confluence page (storage format). Pass `version`, the version number you read with confluence_get_page: the update is refused if the page has changed since, so re-read it and retry. Change the body in one of two ways: `edits`, a list of {find, replace} pairs applied in order to the current storage body, where each `find` must appear exactly once (copy it verbatim from confluence_get_page, including tags and attributes); or `body`, the complete new body. Give one of the two, or neither to change only the title. Optional `title` renames the page; optional `version_message` is the history note. Returns id, title, the new version number and message, the body length, and the webui link. Requires X-Atlassian-Site-Url, X-Atlassian-Email and X-Atlassian-Api-Token.",
+    "inputSchema": {
+      "$defs": {
+        "ConfluenceEdit": {
+          "properties": {
+            "find": {
+              "description": "Exact text to find; must occur exactly once in the body at the time it is applied",
+              "type": "string"
+            },
+            "replace": {
+              "description": "Replacement text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "find",
+            "replace"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "body": {
+          "default": null,
+          "description": "Complete new body; cannot be combined with edits",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body_format": {
+          "default": "storage",
+          "description": "\"storage\" (default) or \"wiki\"; applies to body only",
+          "type": "string"
+        },
+        "edits": {
+          "description": "Exact find/replace pairs applied in order to the current storage body",
+          "items": {
+            "$ref": "#/$defs/ConfluenceEdit"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "page_id": {
+          "description": "Confluence content ID (numeric string)",
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "New title; omitted keeps the current title",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The page's current version number, as returned by confluence_get_page",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version_message": {
+          "default": null,
+          "description": "Note shown in the page history",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "page_id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "name": "confluence_update_page"
+  },
+  {
     "description": "Upload a small file attachment to a Jira issue, content as a base64-encoded string. For anything beyond a few hundred KB use jira_get_attachment_upload_url and send the raw bytes with curl instead. Returns the created attachment metadata.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

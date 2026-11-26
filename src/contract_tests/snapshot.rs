@@ -17,7 +17,7 @@ async fn tools_list_matches_snapshot() {
         .as_array()
         .cloned()
         .unwrap_or_else(|| panic!("tools/list has no tools array: {resp:#}"));
-    assert_eq!(tools.len(), 60, "expected 60 tools");
+    assert_eq!(tools.len(), 61, "expected 61 tools");
     tools.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
 
     let mut actual = serde_json::to_string_pretty(&tools).expect("serialize tools");

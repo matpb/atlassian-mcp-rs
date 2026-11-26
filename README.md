@@ -180,6 +180,7 @@ To **read** rich content without losing structure, call **`jira_get_issue`** wit
 | `jira_delete_attachment` | Delete an attachment by **`attachment_id`** (from `jira_list_attachments` or `jira_get_issue`). |
 | `confluence_search` | **CQL** search; `limit` (1 to 100, default 25). |
 | `confluence_create_page` | Create a page via the **v2 API** (`POST /wiki/api/v2/pages`): **`space_id`** (numeric id or space key, e.g. `DOCS`), **`title`**, **`body`**, optional **`body_format`** `storage` (Confluence XHTML, default) or `wiki`, **`parent_id`** (omit for top-level), **`status`** `current` (default) or `draft`. Returns id, title, status and the webui link. |
+| `confluence_update_page` | Update a page via `PUT /wiki/rest/api/content/{id}`. **`version`** is the version you read with `confluence_get_page`; the update is refused if the page has moved on. Change the body with **`edits`** (`find`/`replace` pairs applied in order to the storage body; each `find` must occur exactly once) or **`body`** (complete new body, `body_format` `storage` or `wiki`); give neither to change only **`title`**. Optional **`version_message`**. Returns id, title, the new version number and message, `body_chars` and the webui link. |
 | `confluence_get_page` | Page by content id: **trimmed** fields for LLMs: id, title, status, space (key/name), version, `lastUpdated` (when + author display/email), `body.storage` with `char_count_*` and **truncation** after 120k characters, plus `links.webui` / `links.tinyui` only (no full `_links` map). |
 
 ### Bitbucket (REST 2.0 compatible)

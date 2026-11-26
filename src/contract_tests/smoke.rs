@@ -169,7 +169,7 @@ async fn public_host_header_is_accepted() {
         .expect("send tools/list");
     assert_eq!(response.status().as_u16(), 200);
     let resp: serde_json::Value = response.json().await.expect("tools/list JSON");
-    assert_eq!(resp["result"]["tools"].as_array().map(Vec::len), Some(60));
+    assert_eq!(resp["result"]["tools"].as_array().map(Vec::len), Some(61));
 }
 
 #[tokio::test]
